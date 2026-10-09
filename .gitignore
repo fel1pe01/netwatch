@@ -3,3 +3,7 @@
 .env.*
 !.env.example
 *.log
+
+# Local/legacy files not part of the Cargo project
+/lib.rs
+/replace.md
