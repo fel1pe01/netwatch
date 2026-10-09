@@ -1,0 +1,64 @@
+# Netwatch Configuration Example
+# Copy this file to netwatch.yaml and adjust as needed
+
+agent:
+  name: "netwatch"
+  listen: "0.0.0.0:8080"
+
+storage:
+  path: "/data/netwatch.sqlite"
+
+metrics:
+  enabled: true
+  path: "/data/metrics.sqlite"
+
+api:
+  enabled: true
+
+logging:
+  level: "info"
+
+discovery:
+  enabled: true
+  interval: 300
+
+health:
+  interval: 15
+
+ports:
+  enabled: true
+  interval: 900
+
+snmp:
+  enabled: false
+  interval: 60
+
+scheduler:
+  concurrency: 10
+  rate_limit: 1000
+
+# SNMP credentials (use environment variables for secrets)
+# snmp_v3_users:
+#   - username: "netwatch"
+#     auth_protocol: "SHA"
+#     auth_password: "${SNMP_AUTH_PASSWORD}"
+#     priv_protocol: "AES"
+#     priv_password: "${SNMP_PRIV_PASSWORD}"
+
+# Telegram notifications (use environment variables for secrets)
+# telegram:
+#   enabled: true
+#   bot_token: "${TELEGRAM_BOT_TOKEN}"
+#   chat_id: "${TELEGRAM_CHAT_ID}"
+
+# Kafka configuration (optional)
+# kafka:
+#   enabled: false
+#   brokers: ["kafka:9092"]
+#   topic_prefix: "netwatch"
+#   security_protocol: "PLAINTEXT"
+
+# Alertmanager integration
+# alertmanager:
+#   enabled: true
+#   url: "http://alertmanager:9093"

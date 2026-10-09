@@ -1,0 +1,109 @@
+groups:
+  - name: netwatch.rules
+    interval: 30s
+    rules:
+      # Instance health
+      - alert: NetwatchDown
+        expr: up{job="netwatch"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Netwatch instance is down"
+          description: "Netwatch has been down for more than 1 minute"
+
+      # Scheduler health
+      - alert: NetwatchSchedulerErrors
+        expr: rate(netwatch_scheduler_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Netwatch scheduler errors detected"
+          description: "Scheduler error rate is {{ $value }} per second"
+
+      # Health check failures
+      - alert: NetwatchHighFailureRate
+        expr: |
+          sum(rate(netwatch_health_check_failures_total[5m])) by (protocol)
+          /
+          sum(rate(netwatch_health_checks_total[5m])) by (protocol)
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High health check failure rate for {{ $labels.protocol }}"
+          description: "Failure rate for {{ $labels.protocol }} is above 10%"
+
+      # Latency alerts
+      - alert: NetwatchHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(netwatch_health_check_latency_seconds_bucket[5m])) by (le, protocol)
+          ) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High p95 latency for {{ $labels.protocol }}"
+          description: "p95 latency for {{ $labels.protocol }} is {{ $value }}s"
+
+      # Collector errors
+      - alert: NetwatchCollectorError
+        expr: rate(netwatch_collector_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Collector errors detected"
+          description: "Collector {{ $labels.collector }} has errors: {{ $labels.error }}"
+
+      # Storage errors
+      - alert: NetwatchStorageErrors
+        expr: rate(netwatch_storage_errors_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage errors detected"
+          description: "Storage layer reporting errors at rate {{ $value }}/s"
+
+      # Incident alerts
+      - alert: NetwatchOpenIncidents
+        expr: count(netwatch_incidents_open) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High number of open incidents"
+          description: "There are {{ $value }} open incidents"
+
+      - alert: NetwatchCriticalIncident
+        expr: count(netwatch_incidents_open{severity="critical"}) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical incident open"
+          description: "There is at least one critical incident open"
+
+      # Discovery changes
+      - alert: NetwatchTopologyChanges
+        expr: rate(netwatch_topology_changes_total[1h]) > 5
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "Frequent topology changes detected"
+          description: "Topology change rate is {{ $value }} per hour"
+
+      # Configuration changes
+      - alert: NetwatchConfigChanged
+        expr: rate(netwatch_config_changes_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Configuration changed"
+          description: "Netwatch configuration was modified"

@@ -9,6 +9,8 @@ mod config_file_test;
 pub mod discovery;
 #[path = "events.rs"]
 pub mod events;
+#[path = "incidents.rs"]
+pub mod incidents;
 #[path = "logging.rs"]
 pub mod logging;
 #[path = "metrics.rs"]
