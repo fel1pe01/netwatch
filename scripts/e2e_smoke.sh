@@ -324,7 +324,6 @@ test_http_monitor_tcp_failure() {
 
 test_http_placeholder_endpoints() {
     local endpoints=(
-        "/api/v1/devices"
         "/api/v1/vlans"
         "/api/v1/subnets"
         "/api/v1/gateways"
@@ -341,6 +340,16 @@ test_http_placeholder_endpoints() {
             fail "HTTP ${ep}: expected empty array, got: ${resp}"
         fi
     done
+
+    # Test /api/v1/devices returns new format
+    assert_status "${BASE_URL}/api/v1/devices" "200" "HTTP GET /api/v1/devices"
+    local resp
+    resp=$(curl -s "${BASE_URL}/api/v1/devices" 2>/dev/null)
+    if echo "${resp}" | jq -e 'type == "object" and (.devices | type == "array")' >/dev/null 2>&1; then
+        pass "HTTP /api/v1/devices: correct format with devices array"
+    else
+        fail "HTTP /api/v1/devices: expected object with devices array, got: ${resp}"
+    fi
 }
 
 test_http_ping_invalid_content_type() {

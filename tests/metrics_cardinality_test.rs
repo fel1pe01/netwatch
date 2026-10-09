@@ -3,8 +3,11 @@ use netwatch::metrics::AppMetrics;
 use netwatch::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
+use netwatch::storage::Storage;
 use prometheus::core::Collector;
 use reqwest::Client;
+use std::sync::Arc;
+use tempfile::tempdir;
 use tokio::net::TcpListener;
 
 async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -12,10 +15,15 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let addr = listener.local_addr().unwrap();
     let base_url = format!("http://{}", addr);
 
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.sqlite");
+    let storage = Storage::connect(db_path.to_str().unwrap()).await.unwrap();
+    let storage = Arc::new(storage);
+
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = router().merge(axum::Router::new().route(
+    let app = router(storage).merge(axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));

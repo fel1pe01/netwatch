@@ -1,7 +1,10 @@
 use netwatch::api::router;
 use netwatch::metrics::AppMetrics;
+use netwatch::storage::Storage;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::sync::Arc;
+use tempfile::tempdir;
 use tokio::net::TcpListener;
 
 async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -9,10 +12,15 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let addr = listener.local_addr().unwrap();
     let base_url = format!("http://{}", addr);
 
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("test.sqlite");
+    let storage = Storage::connect(db_path.to_str().unwrap()).await.unwrap();
+    let storage = Arc::new(storage);
+
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = router().merge(axum::Router::new().route(
+    let app = router(storage).merge(axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));
@@ -256,7 +264,6 @@ async fn http_placeholder_endpoints() {
     let client = Client::new();
 
     let endpoints = [
-        "/api/v1/devices",
         "/api/v1/vlans",
         "/api/v1/subnets",
         "/api/v1/gateways",

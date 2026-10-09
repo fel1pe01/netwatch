@@ -4,19 +4,46 @@ use crate::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
 use crate::monitoring::{check_tcp, ping, HealthCheckResult};
+use crate::storage::Storage;
 use axum::{
+    extract::State,
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
+use std::sync::Arc;
+
 pub async fn health_handler() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-pub async fn devices_handler() -> Json<Value> {
-    Json(json!([]))
+pub async fn devices_handler(State(storage): State<Arc<Storage>>) -> Json<Value> {
+    use serde::{Deserialize, Serialize};
+    use sqlx::FromRow;
+
+    #[derive(Debug, Serialize, Deserialize, FromRow)]
+    struct DeviceRow {
+        id: String,
+        hostname: Option<String>,
+        ip: Option<String>,
+        mac: Option<String>,
+        device_type: Option<String>,
+        source: Option<String>,
+        confidence: Option<String>,
+        observed_at: Option<String>,
+        created_at: String,
+        updated_at: String,
+    }
+
+    let devices =
+        sqlx::query_as::<_, DeviceRow>("SELECT * FROM devices ORDER BY created_at DESC LIMIT 100")
+            .fetch_all(&storage.pool)
+            .await
+            .unwrap_or_default();
+
+    Json(json!({"devices": devices}))
 }
 
 async fn empty_handler() -> Json<Value> {
@@ -114,7 +141,7 @@ pub async fn tcp_handler(Json(req): Json<TcpRequest>) -> Json<HealthCheckResult>
     Json(res)
 }
 
-pub fn router() -> Router {
+pub fn router(storage: Arc<Storage>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/devices", get(devices_handler))
@@ -127,4 +154,5 @@ pub fn router() -> Router {
         .route("/api/v1/monitor/ping", post(ping_handler))
         .route("/api/v1/monitor/tcp", post(tcp_handler))
         .route("/api/v1/topology", get(empty_handler))
+        .with_state(storage)
 }
