@@ -1,7 +1,7 @@
 # Netwatch - Architecture and Functional Audit
 
-**Generated:** 2026-10-08  
-**Version:** 0.1.0  
+**Generated:** 2026-10-08
+**Version:** 0.1.0
 **Status:** Code-backed audit of actual implementation
 
 ---
@@ -16,7 +16,7 @@
 - `netwatch discover local` — Local interface and route discovery
 - `netwatch` (no subcommand) — Start HTTP server on 0.0.0.0:8080
 
-**Partially Implemented:** None  
+**Partially Implemented:** None
 **Missing:** No config file override (`--config`), no persistent scheduling via CLI
 
 ### 1.2 HTTP API
@@ -445,7 +445,7 @@ metrics_handler()
 | `netwatch_scheduler_jobs_total` | Counter | — | Total scheduler jobs started | Never (scheduler unused) |
 | `netwatch_scheduler_errors_total` | Counter | — | Total scheduler errors | Never (scheduler unused) |
 
-**Registration:** Eager — registered in `AppMetrics::new()` at server startup  
+**Registration:** Eager — registered in `AppMetrics::new()` at server startup
 **Registry:** `prometheus::default_registry()`
 
 ### 7.2 Health Check Metrics (Lazy — On First Use)
@@ -456,8 +456,8 @@ metrics_handler()
 | `netwatch_health_check_failures_total` | Counter | `protocol` | Failed health checks | On failed CLI/HTTP ping/tcp check |
 | `netwatch_health_check_latency_seconds` | Histogram | `protocol` | Check latency (seconds) | On successful CLI/HTTP ping/tcp check with latency |
 
-**Label Values:** `protocol` ∈ {"icmp", "tcp"}  
-**Registration:** Lazy — via `once_cell::sync::Lazy` on first `with_label_values()` call  
+**Label Values:** `protocol` ∈ {"icmp", "tcp"}
+**Registration:** Lazy — via `once_cell::sync::Lazy` on first `with_label_values()` call
 **Registry:** `prometheus::default_registry()` (same as AppMetrics)
 
 ### 7.3 Cardinality Analysis
@@ -472,7 +472,7 @@ metrics_handler()
 
 **Policy:** `protocol` is the ONLY dynamic label allowed on health-check metrics.
 
-**Enforcement:** 
+**Enforcement:**
 - Health check metrics defined in `src/monitoring/metrics.rs` use `&["protocol"]` only
 - No code path adds `host`, `target`, `ip`, `port`, or any user-supplied value as a label
 - CLI and HTTP handlers hardcode `"icmp"` or `"tcp"` string literals
@@ -538,7 +538,7 @@ metrics_handler()
 | 29 | ICMP success metrics (direct) | ✅ | ✅ | test_icmp_success_metrics | Unit | Metrics | — |
 | 29 | TCP success metrics (direct) | ✅ | ✅ | test_tcp_success_metrics | Unit | Metrics | — |
 
-**Legend:** ✅ = Implemented, ❌ = Not implemented / Not wired  
+**Legend:** ✅ = Implemented, ❌ = Not implemented / Not wired
 **Note:** Rows 1-16 are automated via CLI/HTTP integration tests; rows 17-20 are existing unit/integration tests; rows 21-22 are metrics handler/cardinality tests; rows 23-26 are HTTP integration tests for failure metrics and config; rows 27-30 are direct metric unit tests for success/failure verification.
 
 ---

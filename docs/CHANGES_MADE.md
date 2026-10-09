@@ -1,6 +1,6 @@
 # Changes Made During Implementation
 
-**Date:** 2026-10-08  
+**Date:** 2026-10-08
 **Implementation Session:** Complete functional audit, build fix, Prometheus metrics restoration, test implementation, documentation, and E2E validation.
 
 ---
@@ -11,7 +11,7 @@ This implementation performed a complete code-backed functional audit of the net
 
 **Total test count after implementation:** 41 tests (all passing)
 - 6 CLI integration tests
-- 13 HTTP integration tests  
+- 13 HTTP integration tests
 - 9 Metrics cardinality tests
 - 5 Config file integration tests
 - 6 existing unit/integration tests
@@ -24,11 +24,11 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 1. `src/metrics.rs` — Fixed Prometheus Metrics Registry Bug & Uptime Metric
 
-**Status:** Modified  
-**Category:** Production code  
+**Status:** Modified
+**Category:** Production code
 **Change:** Completely rewrote `AppMetrics` to use the default Prometheus registry instead of a custom registry, enabling health check metrics to be exposed alongside AppMetrics. Also implemented functional uptime metric that updates on each metrics scrape.
 
-**Previous behavior:** 
+**Previous behavior:**
 - `AppMetrics::new()` created a custom registry with namespace "netwatch"
 - `metrics_handler()` used `prometheus::default_registry()` which didn't include AppMetrics
 - Health check metrics were registered to default registry but never appeared because handler used wrong registry
@@ -37,12 +37,12 @@ This implementation performed a complete code-backed functional audit of the net
 
 **New behavior:**
 - `AppMetrics::new()` registers metrics to `prometheus::default_registry()`
-- `metrics_handler()` uses `prometheus::default_registry()` 
+- `metrics_handler()` uses `prometheus::default_registry()`
 - Both AppMetrics and health check metrics share the same registry
 - Uptime metric updates on each `/metrics` scrape using `Instant::elapsed()`
 - Result: `/metrics` exposes all metrics correctly with accurate uptime
 
-**Impact/Compatibility:** 
+**Impact/Compatibility:**
 - Metric names unchanged (still `netwatch_info`, `netwatch_uptime_seconds`, etc.)
 - Health check metrics now appear correctly after first use
 - Uptime metric now reports actual seconds since server start
@@ -54,8 +54,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 2. `src/main.rs` — Fixed Metrics Handler Integration
 
-**Status:** Modified  
-**Category:** Production code  
+**Status:** Modified
+**Category:** Production code
 **Change:** Updated server startup to use the fixed `AppMetrics::metrics_handler()` static method with uptime gauge and start_time.
 
 **Previous behavior:** Used `AppMetrics::metrics_handler` which referenced the broken custom registry approach.
@@ -70,8 +70,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 3. `src/lib.rs` — Added Test Modules
 
-**Status:** Modified  
-**Category:** Production code (test infrastructure)  
+**Status:** Modified
+**Category:** Production code (test infrastructure)
 **Change:** Added `metrics_handler_test` and `config_file_test` modules to lib.rs so their tests are compiled and run.
 
 **Validation:** `cargo test` now runs all test modules
@@ -80,8 +80,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 4. `src/metrics_handler_test.rs` — Fixed Test Implementation
 
-**Status:** Modified  
-**Category:** Tests  
+**Status:** Modified
+**Category:** Tests
 **Change:** Updated test to use `crate::` paths instead of `netwatch::` paths, fixed to use new static method signature with uptime gauge and start_time parameters.
 
 **Validation:** `cargo test metrics_handler` passes
@@ -92,8 +92,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 5. `tests/cli_tests.rs` — CLI Integration Tests
 
-**Status:** Added  
-**Category:** Tests  
+**Status:** Added
+**Category:** Tests
 **Change:** Created comprehensive CLI tests using `assert_cmd` crate.
 
 **Tests (6):**
@@ -112,8 +112,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 6. `tests/http_integration_tests.rs` — HTTP Integration Tests
 
-**Status:** Added  
-**Category:** Tests  
+**Status:** Added
+**Category:** Tests
 **Change:** Created comprehensive HTTP API tests using `reqwest` and a test server.
 
 **Tests (13):**
@@ -139,8 +139,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 7. `tests/metrics_cardinality_test.rs` — Metrics Cardinality Enforcement Tests
 
-**Status:** Added  
-**Category:** Tests  
+**Status:** Added
+**Category:** Tests
 **Change:** Created tests enforcing the cardinality policy: only `protocol` label allowed on health check metrics. Added failure and success metric verification tests.
 
 **Tests (9):**
@@ -164,8 +164,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 8. `src/config_file_test.rs` — Configuration File Integration Tests
 
-**Status:** Added  
-**Category:** Tests  
+**Status:** Added
+**Category:** Tests
 **Change:** Created tests for `Config::from_path()` covering valid files, missing files, invalid YAML, empty files, and partial configs.
 
 **Tests (5):**
@@ -181,8 +181,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 9. `tests/config_file_test.rs` — Configuration File Integration Tests
 
-**Status:** Added  
-**Category:** Tests  
+**Status:** Added
+**Category:** Tests
 **Change:** Created tests for `Config::from_path()` covering valid files, missing files, invalid YAML, empty files, and partial configs.
 
 **Tests (5):**
@@ -200,8 +200,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 10. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete Functional Audit
 
-**Status:** Updated  
-**Category:** Documentation  
+**Status:** Updated
+**Category:** Documentation
 **Changes:**
 - Updated Section 10 (Functional Test Audit) with accurate 25-row table reflecting all 40 tests
 - Updated Section 12 (Implementation Status Summary) with accurate test counts
@@ -214,8 +214,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 9. `scripts/e2e_smoke.sh` — End-to-End Smoke Test Script
 
-**Status:** Added (unchanged from previous)  
-**Category:** E2E / Tooling  
+**Status:** Added (unchanged from previous)
+**Category:** E2E / Tooling
 **Tests (42):**
 - 5 CLI tests
 - 12 HTTP tests (8 functional + 4 placeholder + 1 error case)
@@ -229,8 +229,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 10. `Cargo.toml` — Dev Dependencies Added
 
-**Status:** Modified  
-**Category:** Dependencies  
+**Status:** Modified
+**Category:** Dependencies
 **Changes:**
 - `assert_cmd = "2.2.2"` — CLI testing
 - `predicates = "3.1.4"` — Assertion predicates for CLI tests
@@ -247,8 +247,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 11. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete Functional Audit
 
-**Status:** Added (updated)  
-**Category:** Documentation  
+**Status:** Added (updated)
+**Category:** Documentation
 **Content:** Comprehensive code-backed audit covering:
 1. Functionality overview (CLI, HTTP API, ICMP, TCP, Discovery, Metrics, Config, Storage, Scheduler, Events)
 2. Architecture diagram (Mermaid) showing real module dependencies
@@ -269,8 +269,8 @@ This implementation performed a complete code-backed functional audit of the net
 
 ### 12. `docs/CHANGES_MADE.md` — Change Log
 
-**Status:** Added (updated)  
-**Category:** Documentation  
+**Status:** Added (updated)
+**Category:** Documentation
 **Content:** This file, documenting all changes made during implementation
 
 ---
