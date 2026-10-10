@@ -59,7 +59,9 @@ check_binary() {
 
 start_server() {
     log "Starting netwatch server..."
-    "${BINARY}" > "${LOG_FILE}" 2>&1 &
+    # Use a temporary database file for each test run
+    local test_db="/tmp/netwatch_e2e_${RANDOM}.sqlite"
+    NETWATCH_STORAGE_PATH="${test_db}" "${BINARY}" > "${LOG_FILE}" 2>&1 &
     SERVER_PID=$!
     echo "${SERVER_PID}" > "${PID_FILE}"
 

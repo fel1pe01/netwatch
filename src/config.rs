@@ -115,8 +115,20 @@ impl Config {
     pub fn from_path(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Could not read config at {}", path.display()))?;
-        let cfg: Config = serde_yaml::from_str(&content)
+        let mut cfg: Config = serde_yaml::from_str(&content)
             .with_context(|| format!("Failed to parse YAML at {}", path.display()))?;
+
+        // Override with environment variables if present
+        if let Ok(path) = std::env::var("NETWATCH_STORAGE_PATH") {
+            cfg.storage.path = path;
+        }
+        if let Ok(level) = std::env::var("NETWATCH_LOG_LEVEL") {
+            cfg.logging.level = level;
+        }
+        if let Ok(listen) = std::env::var("NETWATCH_LISTEN") {
+            cfg.agent.listen = listen;
+        }
+
         Ok(cfg)
     }
 }

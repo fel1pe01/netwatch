@@ -22,5 +22,13 @@ mod metrics_handler_test;
 pub mod monitoring;
 #[path = "scheduler.rs"]
 pub mod scheduler;
+#[path = "snmp.rs"]
+pub mod snmp;
 #[path = "storage.rs"]
 pub mod storage;
+#[path = "topology.rs"]
+pub mod topology;
+#[path = "topology_builder.rs"]
+pub mod topology_builder;
+#[path = "topology_store.rs"]
+pub mod topology_store;

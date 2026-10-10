@@ -15,11 +15,15 @@ use netwatch::monitoring::metrics::{
 };
 use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
 use netwatch::scheduler::Scheduler;
+use netwatch::snmp::{DeviceSystemInfo, InterfaceMetrics, SnmpCollector, SnmpTarget};
 use netwatch::storage::Storage;
+use netwatch::topology_builder::{SnmpDeviceData, SnmpInterfaceData, TopologyBuilder};
+use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
 use uuid::Uuid;
@@ -514,6 +518,16 @@ async fn main() -> Result<()> {
     let storage = Storage::connect(&config.storage.path).await?;
     let storage = Arc::new(storage);
 
+    // Initialize topology store
+    let topology_store = TopologyStore::new(storage.pool.clone());
+    let topology_store = Arc::new(topology_store);
+
+    // Initialize topology builder
+    let mut topology_builder = TopologyBuilder::new(topology_store.clone());
+
+    // Initialize SNMP collector
+    let snmp_collector = SnmpCollector::new(config.scheduler.concurrency, 100);
+
     // Initialize event bus
     let event_bus = Arc::new(EventBus::new());
 
@@ -522,6 +536,51 @@ async fn main() -> Result<()> {
 
     // Register health check jobs from config
     register_monitoring_jobs(&mut scheduler, storage.clone(), event_bus, &config).await?;
+
+    // Register topology discovery job
+    if config.discovery.enabled && config.discovery.interval > 0 {
+        let topology_builder = topology_builder.clone();
+        let interval = Duration::from_secs(config.discovery.interval);
+        let job = netwatch::scheduler::Job {
+            name: "topology_discovery".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let mut builder = topology_builder.clone();
+                Box::pin(async move {
+                    if let Err(e) = builder.build_from_discovery().await {
+                        tracing::error!("Topology discovery failed: {}", e);
+                    }
+                    if let Err(e) = builder.create_snapshot().await {
+                        tracing::error!("Failed to create topology snapshot: {}", e);
+                    }
+                    Ok(())
+                }),
+            },
+        };
+        scheduler.add_job(job);
+    }
+
+    // Register SNMP polling jobs
+    if config.snmp.enabled && config.snmp.interval > 0 {
+        let snmp_collector = Arc::new(snmp_collector);
+        let storage = storage.clone();
+        let interval = Duration::from_secs(config.snmp.interval);
+        let job = netwatch::scheduler::Job {
+            name: "snmp_poll".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let collector = snmp_collector.clone();
+                let storage = storage.clone();
+                Box::pin(async move {
+                    // In a real implementation, this would iterate over configured SNMP targets
+                    // For now, this is a placeholder
+                    tracing::debug!("SNMP polling job executed (placeholder)");
+                    Ok(())
+                })
+            }),
+        };
+        scheduler.add_job(job);
+    }
 
     // Start scheduler in background
     let scheduler_handle = tokio::spawn(async move {
