@@ -15,9 +15,9 @@ use netwatch::monitoring::metrics::{
 };
 use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
 use netwatch::scheduler::Scheduler;
-use netwatch::snmp::{DeviceSystemInfo, InterfaceMetrics, SnmpCollector, SnmpTarget};
+use netwatch::snmp::SnmpCollector;
 use netwatch::storage::Storage;
-use netwatch::topology_builder::{SnmpDeviceData, SnmpInterfaceData, TopologyBuilder};
+use netwatch::topology_builder::TopologyBuilder;
 use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
 use std::net::SocketAddr;
@@ -523,7 +523,7 @@ async fn main() -> Result<()> {
     let topology_store = Arc::new(topology_store);
 
     // Initialize topology builder
-    let mut topology_builder = TopologyBuilder::new(topology_store.clone());
+    let topology_builder = TopologyBuilder::new(topology_store.clone());
 
     // Initialize SNMP collector
     let snmp_collector = SnmpCollector::new(config.scheduler.concurrency, 100);
@@ -544,17 +544,20 @@ async fn main() -> Result<()> {
         let job = netwatch::scheduler::Job {
             name: "topology_discovery".to_string(),
             interval,
-            task: Arc::new(move || {
-                let mut builder = topology_builder.clone();
-                Box::pin(async move {
-                    if let Err(e) = builder.build_from_discovery().await {
-                        tracing::error!("Topology discovery failed: {}", e);
-                    }
-                    if let Err(e) = builder.create_snapshot().await {
-                        tracing::error!("Failed to create topology snapshot: {}", e);
-                    }
-                    Ok(())
-                }),
+            task: {
+                let builder = topology_builder.clone();
+                Arc::new(move || {
+                    let mut builder = builder.clone();
+                    Box::pin(async move {
+                        if let Err(e) = builder.build_from_discovery().await {
+                            tracing::error!("Topology discovery failed: {}", e);
+                        }
+                        if let Err(e) = builder.create_snapshot().await {
+                            tracing::error!("Failed to create topology snapshot: {}", e);
+                        }
+                        Ok(())
+                    })
+                })
             },
         };
         scheduler.add_job(job);
@@ -569,8 +572,8 @@ async fn main() -> Result<()> {
             name: "snmp_poll".to_string(),
             interval,
             task: Arc::new(move || {
-                let collector = snmp_collector.clone();
-                let storage = storage.clone();
+                let _collector = snmp_collector.clone();
+                let _storage = storage.clone();
                 Box::pin(async move {
                     // In a real implementation, this would iterate over configured SNMP targets
                     // For now, this is a placeholder
