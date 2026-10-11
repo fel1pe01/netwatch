@@ -287,7 +287,7 @@ None.
 |---------|--------|
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS |
-| `cargo test` | PASS (41 tests) |
+| `cargo test` | PASS (46 tests) |
 | `cargo clippy --all-targets --all-features -- -D warnings` | PASS |
 | `cargo build --release` | PASS |
 | `scripts/e2e_smoke.sh` | PASS (42/42) |
@@ -307,14 +307,19 @@ None.
 - `tests/http_integration_tests.rs` (13 tests)
 - `tests/metrics_cardinality_test.rs` (9 tests)
 - `src/config_file_test.rs` (5 tests)
+- `tests/drift_tests.rs` (5 tests)
 
 ### Documentation Files Updated
-- `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete audit with accurate test table
+- `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete audit with updated test table (30 rows)
 - `docs/CHANGES_MADE.md` — This file
+- `docs/IMPLEMENTATION_STATUS.md` — Updated P3 status (Objectives 11, 12)
+- `docs/ROADMAP.md` — Updated P3 status to "In Progress: Drift detection ✅ Complete"
+- `docs/DEVELOPMENT.md` — Updated test counts and documentation
 - `scripts/e2e_smoke.sh` — E2E smoke test (executable)
+- `docs/audits/P3_AUDIT.md` — P3 audit matrix with 30 criteria
 
 ### Configuration / Dependency Files
-- `Cargo.toml` — Added 4 dev-dependencies
+- `Cargo.toml` — No new dependencies needed (existing async-snmp, uuid, etc.)
 
 ### Reverted Changes
 - None
@@ -334,6 +339,10 @@ None.
 9. **No graceful shutdown** — No signal handling
 10. **Linux-only discovery** — Uses `/sys/class/net` and `/proc/net/route`
 11. **ICMP implementation** — Requires `ping` binary; no raw socket fallback
+12. **Drift→incident correlation** — Topology changes not linked to incidents
+13. **No silence engine** — Silence fields exist but no management engine
+14. **No incident report generator** — No report generation from incidents
+15. **No disaster recovery scripts** — No backup/restore procedures
 
 ---
 
@@ -345,23 +354,31 @@ src/
   main.rs              (Modified - fixed handler wiring)
   lib.rs               (Modified - added test modules)
   metrics_handler_test.rs (Modified - fixed test paths and method signature)
+  drift.rs             (Added - drift detection for P3)
 
 tests/
   cli_tests.rs         (Added - 6 CLI tests)
   http_integration_tests.rs (Added - 13 HTTP tests)
   metrics_cardinality_test.rs (Added - 9 cardinality tests)
+  drift_tests.rs       (Added - 5 drift detection tests)
 
 src/
   config_file_test.rs  (Added - 5 config tests)
+  drift.rs             (Added - drift detection for P3)
 
 docs/
-  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (Added/Updated - complete audit)
-  CHANGES_MADE.md      (Added/Updated - this file)
+  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (Updated - complete audit)
+  CHANGES_MADE.md      (Updated - this file)
+  IMPLEMENTATION_STATUS.md (Updated - P3 status)
+  ROADMAP.md           (Updated - P3 status)
+  DEVELOPMENT.md       (Updated - test counts)
+  ROADMAP.md           (Updated - P3 status)
+  audits/P3_AUDIT.md   (Added - P3 audit matrix)
 
 scripts/
   e2e_smoke.sh         (Added - executable E2E test)
 
-Cargo.toml             (Modified - added dev dependencies)
+Cargo.toml             (No new dependencies needed)
 ```
 
 ---

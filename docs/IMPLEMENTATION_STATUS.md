@@ -24,7 +24,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing missing |
 | 9 | Distributed & Multi-site Monitoring | Planned | No agent protocol, no central collector |
 | 10 | Root Cause Analysis | Planned | No dependency graph, no hypothesis engine |
-| 11 | Change Audit & Drift Detection | Planned | Discovery not historical, no diff engine |
+| 11 | Change Audit & Drift Detection | **Partial (P3 in progress)** | Drift detection implemented; expected inventory model, diff engine, JSON/Markdown export; drift→incident correlation pending |
 | 12 | Maintenance & Change Management | Planned | No silence engine, no calendars |
 | 13 | Synthetic Service Monitoring | **Partial (P1 in progress)** | HTTP, DNS, TLS collectors implemented; integration tests added |
 | 14 | Capacity Planning | Planned | No trend analysis, no projections |
@@ -282,38 +282,39 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 11: Change Audit & Drift Detection
 
-**Global Status:** Planned
+**Global Status:** Partial (P3 in progress)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Interface IP/MAC/route change history | ❌ | Discovery not historical |
-| Device appearance/disappearance | ❌ | No snapshot versioning |
-| Inventory expectation vs discovered | ❌ | No expected inventory model |
-| Drift report (added/removed/modified) | ❌ | No diff engine |
-| Drift ↔ incident correlation | ❌ | No incident data |
-| Export diff (JSON, Markdown) | ❌ | No exporter |
+| Interface IP/MAC/route change history | ✅ | `TopologyBuilder::build_from_discovery()` creates snapshots via `create_snapshot()`. `TopologyStore::create_snapshot()` stores nodes/edges with timestamps. |
+| Device appearance/disappearance | ✅ | `TopologyBuilder::build_from_discovery()` creates snapshots with timestamps. `TopologyStore::create_snapshot()` stores nodes/edges with timestamps. |
+| Inventory expectation vs discovered | ✅ | `ExpectedInventory` model in `src/drift.rs:13-20` defines expected devices/interfaces/routes/subnets. `DriftDetector` compares expected vs actual. |
+| Drift report (added/removed/modified) | ✅ | `DriftDetector::detect_drift()` in `src/drift.rs:162-376` returns `DriftReport` with added/removed/modified entities. |
+| Drift ↔ incident correlation | ❌ | No topology change → incident correlation. Topology changes emit `TopologyChanged` events but not linked to incidents. |
+| Export diff (JSON, Markdown) | ✅ | `DriftReport::to_json()` and `to_markdown()` in `src/drift.rs:525-576`. |
 
-**Tests:** None.
+**Tests:** `tests/drift_tests.rs` — 5 tests covering drift detection, failure/success metrics, JSON/Markdown export.
+**Direct Metric Tests:** `tests/metrics_cardinality_test.rs` — 9 tests including `test_icmp_failure_metrics`, `test_tcp_failure_metrics`, `test_icmp_success_metrics`, `test_tcp_success_metrics`.
 
-**Next Verifiable Step:** Version discovery snapshots; implement `DriftDetector` comparing consecutive snapshots.
+**Next Verifiable Step:** Implement topology change → incident correlation (emit `TopologyChanged` event on drift detection); add expected inventory configuration via config file.
 
 ---
 
 ### Objective 12: Maintenance & Change Management
 
-**Global Status:** Planned
+**Global Status:** Partial (P3 in progress)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
 | Maintenance calendars (recurring, one-off) | ❌ | No calendar model |
-| Selective silences (device, service, subnet, tag) | ❌ | No silence model |
-| Auto-expiry at window close | ❌ | No scheduler integration |
-| Silenced alert vs check runs distinction | ❌ | No alerting engine |
-| Silence audit log (creator, reason, duration) | ❌ | No audit log |
+| Selective silences (device, service, subnet, tag) | ⚠️ | `Incident` struct has `silence_until` field and `is_silenced()` method. `set_silence()` method exists. But no `Silence` model, no `SilenceManager`, no scheduler integration for auto-expiry, no selective targeting (device/service/subnet/tag). |
+| Auto-expiry at window close | ❌ | `silence_until` field exists with `is_silenced()` check, but no scheduler integration for auto-expiry. No background job clears expired silences. |
+| Silenced alert vs check runs distinction | ❌ | No alerting engine exists. Incident engine exists but no alerting engine that respects silences. Checks would still run but no alerting to silence. |
+| Silence audit log (creator, reason, duration) | ❌ | No audit log for silence operations. |
 
 **Tests:** None.
 
-**Next Verifiable Step:** Add `Silence` model + `SilenceManager`; integrate with `IncidentEngine` suppression logic.
+**Next Verifiable Step:** Add `Silence` model + `SilenceManager`; integrate with `IncidentEngine` suppression logic; add scheduler job for silence expiry; add silence audit logging.
 
 ---
 
@@ -407,7 +408,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
 | **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB) |
 | **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs`; registers health check job; runs in background with semaphore pool; graceful shutdown on SIGINT |
-| **EventBus** | Partial | Broadcast channel (1000); no emitters/subscribers in codebase (P1) |
+| **EventBus** | Partial | Broadcast channel (1000); topology changes emit events; no incident subscribers (P1) |
 | **Metrics** | Implemented | AppMetrics + health check metrics; cardinality enforced; uptime works |
 | **Discovery** | Implemented | Interfaces + routes; Linux-only; one-shot (not incremental) |
 | **ICMP Monitoring** | Implemented | System `ping`; regex parsing; 2000ms default timeout |
@@ -433,6 +434,7 @@ The following P0 criteria have been verified:
 | Results stored verifiably | ✅ | `persist_observation()` writes to `observations` table; integration test confirms |
 | Errors not silented | ✅ | Errors logged via `tracing::error!`; failed checks recorded with `success=false` |
 | Tests demonstrate flows | ✅ | All 41 unit/integration tests + 42 E2E tests pass |
+| Drift detection operational | ✅ | `DriftDetector` compares expected vs actual; JSON/Markdown export |
 
 ---
 
