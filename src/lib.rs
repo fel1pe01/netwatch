@@ -7,6 +7,8 @@ pub mod config;
 mod config_file_test;
 #[path = "discovery/mod.rs"]
 pub mod discovery;
+#[path = "drift.rs"]
+pub mod drift;
 #[path = "events.rs"]
 pub mod events;
 #[path = "incidents.rs"]
