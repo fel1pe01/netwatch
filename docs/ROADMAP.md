@@ -4,16 +4,24 @@ This document maps the 16 strategic objectives to implementation phases, depende
 
 ## Phase Overview
 
-| Phase | Theme | Objectives | Target |
-|-------|-------|------------|--------|
-| P0 | Foundation | 8, 1 | Core wiring: config, storage, scheduler, basic monitoring persistence |
-| P1 | Operational Observability | 3, 4, 13 | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
-| P2 | Infrastructure Visibility | 2, 5 | Live topology, SNMP, inventory |
-| P3 | Operational Reliability | 11, 12, 15, 16 | Change audit, maintenance windows, incident reports, disaster recovery |
-| P4 | Intelligence & Capacity | 7, 10, 14 | Anomaly detection, root cause, capacity planning |
-| P5 | Scale & Advanced Analysis | 9, 6 | Distributed agents, traffic analysis |
+| Phase | Theme | Objectives | Status | Target |
+|-------|-------|------------|--------|--------|
+| P0 | Foundation | 8, 1 | ✅ Complete | Core wiring: config, storage, scheduler, basic monitoring persistence |
+| P1 | Operational Observability | 3, 4, 13 | ✅ Complete | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
+| P2 | Infrastructure Visibility | 2, 5 | ✅ Complete | Live topology, SNMP, inventory |
+| P3 | Operational Reliability | 11, 12, 15, 16 | 🔄 Next | Change audit, maintenance windows, incident reports, disaster recovery |
+| P4 | Intelligence & Capacity | 7, 10, 14 | Planned | Anomaly detection, root cause, capacity planning |
+| P5 | Scale & Advanced Analysis | 9, 6 | Planned | Distributed agents, traffic analysis |
 
 **Objective 8 (Engineering Quality) is transversal** — CI/CD, testing, security, documentation apply to every phase.
+
+### Phase Status Summary
+- **P0**: ✅ Complete — Core wiring complete (config, storage, scheduler, monitoring persistence)
+- **P1**: ✅ Complete — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
+- **P2**: ✅ Complete — SNMP (v2c/v3), topology builder, inventory persistence, metrics cardinality enforcement
+- **P3**: 🔄 **Next** — Change audit, maintenance windows, incident reports, disaster recovery
+- **P4**: Planned — Anomaly detection, root cause analysis, capacity planning
+- **P5**: Planned — Distributed agents, traffic analysis
 
 ---
 
