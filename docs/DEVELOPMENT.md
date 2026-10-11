@@ -20,12 +20,13 @@ netwatch/
 │   ├── scheduler.rs
 │   ├── events.rs
 │   ├── incidents.rs
-│   ├── config_file_test.rs
-│   ├── metrics_handler_test.rs
-│   ├── snmp.rs
+│   ├── drift.rs
 │   ├── topology.rs
 │   ├── topology_builder.rs
 │   ├── topology_store.rs
+│   ├── snmp.rs
+│   ├── config_file_test.rs
+│   ├── metrics_handler_test.rs
 │   ├── monitoring/
 │   │   ├── mod.rs
 │   │   ├── icmp.rs
@@ -52,7 +53,8 @@ netwatch/
 │   ├── monitoring_tests.rs
 │   ├── http_integration_tests.rs
 │   ├── metrics_cardinality_test.rs
-│   └── config_file_test.rs
+│   ├── config_file_test.rs
+│   └── drift_tests.rs
 ├── scripts/
 │   └── e2e_smoke.sh
 ├── docs/
@@ -84,7 +86,7 @@ All core functionality is split into small, single‑purpose modules.
 cargo test
 ```
 
-The tests include (41 tests passing):
+The tests include (46 tests passing):
 - Configuration parsing (5 tests).
 - SQLite migration and basic queries (2 tests).
 - Scheduler behaviour (job scheduling, timeout, concurrency) — in integration_test.rs.
@@ -95,9 +97,9 @@ The tests include (41 tests passing):
 - Config file loading (5 tests).
 - CLI integration tests (6 tests).
 - Metrics handler (1 test).
-- Config file loading tests (5 tests).
+- Drift detection (5 tests).
 
-Total: 41 unit/integration tests + 42 E2E smoke test checks.
+Total: 46 unit/integration tests + 42 E2E smoke test checks.
 
 ## Building for release
 
@@ -120,4 +122,56 @@ cargo clippy --all-targets --all-features -- -D warnings
 ./scripts/e2e_smoke.sh
 ```
 
-Runs 42 checks against the release binary (5 CLI, 12 HTTP, 10 metrics).
+Runs 42 checks against the release binary (5 CLI, 12 HTTP, 10 metrics, 4 drift, 11 topology).
+
+## Configuration
+
+Create a `config.yaml` based on `config.example.yaml`:
+
+```yaml
+agent:
+  name: "netwatch"
+  listen: "0.0.0.0:8080"
+
+storage:
+  path: "netwatch.sqlite"
+
+metrics:
+  enabled: true
+  path: "metrics.sqlite"
+
+api:
+  enabled: true
+
+logging:
+  level: "info"
+
+discovery:
+  enabled: true
+  interval: 300
+
+health:
+  interval: 15
+
+ports:
+  enabled: true
+  interval: 900
+
+snmp:
+  enabled: false
+  interval: 60
+
+scheduler:
+  concurrency: 10
+  rate_limit: 1000
+```
+
+Run with config:
+```bash
+./target/release/netwatch --config config.yaml
+```
+
+Or use environment variables:
+```bash
+NETWATCH_STORAGE_PATH=/data/netwatch.sqlite NETWATCH_LOG_LEVEL=debug ./target/release/netwatch
+```

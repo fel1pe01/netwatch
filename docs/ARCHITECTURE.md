@@ -10,19 +10,28 @@ This document describes the **current architecture** (as implemented) and the **
 
 ```
 src/
-├── main.rs              # CLI entry point, HTTP server bootstrap
+├── main.rs              # CLI entry point, HTTP server bootstrap, wiring
 ├── lib.rs               # Module declarations
-├── config.rs            # YAML configuration structures (NOT WIRED)
+├── config.rs            # YAML configuration structures (WIRED)
 ├── logging.rs           # Tracing subscriber init
 ├── api.rs               # Axum router + handlers
 ├── metrics.rs           # AppMetrics (Prometheus)
-├── storage.rs           # SQLite pool + migrations (NOT WIRED)
-├── scheduler.rs         # Job queue + worker pool (NOT USED)
-├── events.rs            # Broadcast EventBus (NOT USED)
+├── storage.rs           # SQLite pool + migrations (WIRED)
+├── scheduler.rs         # Job queue + worker pool (RUNNING)
+├── events.rs            # Broadcast EventBus (EMITTING events)
+├── incidents.rs         # Incident state machine + persistence
+├── drift.rs             # Drift detection (expected vs actual)
+├── topology.rs          # Topology graph models
+├── topology_builder.rs  # Topology construction from discovery/SNMP
+├── topology_store.rs    # Topology persistence + snapshots
+├── snmp.rs              # SNMP collector (placeholder)
 ├── monitoring/
 │   ├── mod.rs           # HealthCheckResult, re-exports
 │   ├── icmp.rs          # ping() via system `ping` binary
 │   ├── tcp.rs           # check_tcp() via Tokio TcpStream
+│   ├── dns.rs           # check_dns() via hickory-resolver
+│   ├── http.rs          # check_http() with phase timing
+│   ├── tls.rs           # check_tls() with cert validation
 │   └── metrics.rs       # Health check Prometheus metrics (lazy)
 ├── discovery/
 │   ├── mod.rs           # Re-exports
@@ -34,15 +43,21 @@ src/
 
 | Module | Responsibility | Status |
 |--------|----------------|--------|
-| `main.rs` | CLI parsing, command dispatch, HTTP server startup | ✅ Working |
-| `config.rs` | Typed YAML config with defaults | ⚠️ Defined, not integrated |
-| `api.rs` | HTTP routes, request/response, metrics side-effects | ✅ Core endpoints working |
+| `main.rs` | CLI parsing, command dispatch, HTTP server startup, wiring all components | ✅ Working |
+| `config.rs` | Typed YAML config with defaults, env overrides, `--config` flag | ✅ Wired |
+| `api.rs` | HTTP routes, request/response, metrics side-effects, DB queries | ✅ Core + devices working |
 | `metrics.rs` | AppMetrics (uptime, info, scheduler counters) | ✅ Working |
-| `monitoring/*` | ICMP/TCP checks, HealthCheckResult, Prometheus metrics | ✅ Working |
+| `monitoring/*` | ICMP/TCP/DNS/HTTP/TLS checks, HealthCheckResult, Prometheus metrics | ✅ Working |
 | `discovery/*` | Local interface & route discovery | ✅ Working (Linux-only) |
-| `storage.rs` | SQLite connection, migrations, WAL + FK | ⚠️ Defined, not used |
-| `scheduler.rs` | Periodic job execution, concurrency control | ⚠️ Defined, not instantiated |
-| `events.rs` | In-memory broadcast event bus | ⚠️ Defined, no emitters/subscribers |
+| `storage.rs` | SQLite connection, migrations, WAL + FK | ✅ Wired |
+| `scheduler.rs` | Periodic job execution, concurrency control, graceful shutdown | ✅ Running |
+| `events.rs` | In-memory broadcast event bus, typed events, emission helpers | ✅ Emitting |
+| `incidents.rs` | Incident state machine, persistence, cooldown/silence fields | ✅ Implemented |
+| `drift.rs` | Expected vs actual topology comparison, JSON/Markdown export | ✅ Complete |
+| `topology.rs` | Graph models (nodes, edges, snapshots, diffs) | ✅ Implemented |
+| `topology_builder.rs` | Build graph from discovery/SNMP, Mermaid/DOT/JSON export | ✅ Working |
+| `topology_store.rs` | Persist topology nodes/edges, snapshots, diff with latest | ✅ Working |
+| `snmp.rs` | SNMP collector framework | ⚠️ Placeholder job |
 
 ### Execution Flows
 
@@ -70,10 +85,38 @@ POST /api/v1/monitor/ping
   → metrics recorded via same static counters
 ```
 
+#### Scheduled Monitoring (Server Mode)
+```
+main()
+  → Config loaded (file + env)
+  → Storage::connect() → migrations run
+  → TopologyStore + TopologyBuilder initialized
+  → EventBus created
+  → Scheduler instantiated (concurrency from config)
+  → register_monitoring_jobs():
+      - health_check_icmp (interval from config.health.interval)
+      - health_check_http
+      - health_check_dns
+      - health_check_tls
+      - topology_discovery (if config.discovery.enabled)
+      - snmp_poll (if config.snmp.enabled, placeholder)
+  → Each job:
+      → runs check (ping/http/dns/tls)
+      → records metrics
+      → persists observation to SQLite
+      → emits CheckCompleted/CheckFailed event via EventBus
+  → Topology job:
+      → build_from_discovery() → create_snapshot()
+      → emits TopologyChanged events
+  → Scheduler runs in background tokio task
+  → Graceful shutdown on SIGINT
+```
+
 #### Metrics Exposition
 ```
 GET /metrics
   → AppMetrics::metrics_handler(uptime, start_time)
+  → Updates uptime gauge from Instant::elapsed()
   → prometheus::default_registry().gather()
   → TextEncoder::encode()
   → Returns: AppMetrics + health check metrics (if registered)
@@ -91,19 +134,23 @@ graph TB
     end
 
     subgraph HTTP["HTTP Server (Axum)"]
-        API_ROUTER["api::router()"]
+        API_ROUTER["api::router(storage)"]
         HEALTH["GET /health"]
         INTERFACES["GET /api/v1/interfaces"]
         ROUTES["GET /api/v1/routes"]
+        DEVICES["GET /api/v1/devices (from DB)"]
         PING_API["POST /api/v1/monitor/ping"]
         TCP_API["POST /api/v1/monitor/tcp"]
         METRICS_EP["GET /metrics"]
-        PLACEHOLDERS["Empty endpoints"]
+        PLACEHOLDERS["Empty endpoints: vlans, subnets, gateways, events, topology"]
     end
 
     subgraph MONITORING["Monitoring Core"]
         PING_FN["monitoring::ping()"]
         TCP_FN["monitoring::check_tcp()"]
+        DNS_FN["monitoring::check_dns()"]
+        HTTP_FN["monitoring::check_http()"]
+        TLS_FN["monitoring::check_tls()"]
         HC_RESULT["HealthCheckResult"]
         HC_METRICS["monitoring::metrics\nHEALTH_CHECK_*"]
     end
@@ -113,16 +160,24 @@ graph TB
         RT_DISC["discovery::routing"]
     end
 
-    subgraph METRICS_SYS["Metrics System"]
-        APP_METRICS["metrics::AppMetrics"]
-        DEFAULT_REG["prometheus::default_registry"]
+    subgraph TOPOLOGY["Topology & Drift"]
+        TOPO_BUILDER["topology_builder::TopologyBuilder"]
+        TOPO_STORE["topology_store::TopologyStore"]
+        DRIFT["drift::DriftDetector"]
+        TOPO_EXPORTS["Mermaid / DOT / JSON"]
     end
 
-    subgraph INFRA["Infrastructure (Defined, Unused)"]
+    subgraph INFRA["Infrastructure (Wired)"]
         CONFIG["config::Config"]
         STORAGE["storage::Storage"]
         SCHEDULER["scheduler::Scheduler"]
         EVENTS["events::EventBus"]
+        INCIDENTS["incidents::IncidentStore"]
+    end
+
+    subgraph METRICS_SYS["Metrics System"]
+        APP_METRICS["metrics::AppMetrics"]
+        DEFAULT_REG["prometheus::default_registry"]
     end
 
     CLI_PING --> PING_FN
@@ -134,6 +189,7 @@ graph TB
     API_ROUTER --> HEALTH
     API_ROUTER --> INTERFACES
     API_ROUTER --> ROUTES
+    API_ROUTER --> DEVICES
     API_ROUTER --> PING_API
     API_ROUTER --> TCP_API
     API_ROUTER --> METRICS_EP
@@ -143,21 +199,45 @@ graph TB
     TCP_API --> TCP_FN
     INTERFACES --> IF_DISC
     ROUTES --> RT_DISC
+    DEVICES --> STORAGE
 
     PING_FN --> HC_RESULT
     TCP_FN --> HC_RESULT
+    DNS_FN --> HC_RESULT
+    HTTP_FN --> HC_RESULT
+    TLS_FN --> HC_RESULT
     PING_FN --> HC_METRICS
     TCP_FN --> HC_METRICS
+    DNS_FN --> HC_METRICS
+    HTTP_FN --> HC_METRICS
+    TLS_FN --> HC_METRICS
+
+    SCHEDULER --> PING_FN
+    SCHEDULER --> HTTP_FN
+    SCHEDULER --> DNS_FN
+    SCHEDULER --> TLS_FN
+    SCHEDULER --> TOPO_BUILDER
+
+    TOPO_BUILDER --> IF_DISC
+    TOPO_BUILDER --> RT_DISC
+    TOPO_BUILDER --> TOPO_STORE
+    TOPO_BUILDER --> EVENTS
+    TOPO_BUILDER --> DRIFT
+    TOPO_BUILDER --> TOPO_EXPORTS
+
+    EVENTS -.->|CheckCompleted/Failed| INCIDENTS
+    EVENTS -.->|TopologyChanged| INCIDENTS
+
+    HC_RESULT --> STORAGE
+    HC_RESULT --> EVENTS
 
     METRICS_EP --> APP_METRICS
     APP_METRICS --> DEFAULT_REG
     HC_METRICS --> DEFAULT_REG
 
-    %% Unused connections (dashed)
-    CONFIG -.->|NOT WIRED| API_ROUTER
-    STORAGE -.->|NOT WIRED| API_ROUTER
-    SCHEDULER -.->|NOT USED| CLI_SERVER
-    EVENTS -.->|NOT USED| MONITORING
+    CONFIG --> SCHEDULER
+    CONFIG --> STORAGE
+    CONFIG --> TOPO_BUILDER
 ```
 
 ### Persistence Schema (Migrations)
@@ -173,11 +253,20 @@ graph TB
 | `interfaces` | Device interfaces | id, device_id (FK), name, mac, mtu, state |
 | `services` | Monitored services/ports | id, device_id (FK), port, protocol, name, status |
 | `events` | Incident/event log | id, device_id (FK), type, severity, timestamp, message |
-| `topology_edges` | Graph relationships | id, source_id, target_id, relationship, confidence, evidence |
+| `topology_edges` | Graph relationships (legacy) | id, source_id, target_id, relationship, confidence, evidence |
 | `observations` | Metric samples | id, device_id (FK), metric, value, source, confidence |
-| Indexes on: `devices(ip)`, `interfaces(name)`, `services(port)`, `events(timestamp)` |
 
-**Current gap:** No code writes to these tables. API handlers return `[]`.
+`migrations/20241009000000_topology.sql` adds topology tables:
+
+| Table | Purpose |
+|-------|---------|
+| `topology_nodes` | Current topology nodes with properties, state |
+| `topology_edges` | Current topology edges with provenance, confidence |
+| `topology_snapshots` | Versioned topology snapshots (JSON) |
+
+Indexes on: `devices(ip)`, `interfaces(name)`, `services(port)`, `events(timestamp)`, `topology_nodes(type)`, `topology_nodes(state)`, `topology_edges(source)`, `topology_edges(target)`, `topology_snapshots(timestamp)`.
+
+**Current status:** Scheduler writes observations; API `/devices` queries devices table; topology builder persists nodes/edges/snapshots; drift detector compares expected vs actual.
 
 ### Metrics Catalog (Current)
 
@@ -185,13 +274,13 @@ graph TB
 |--------|------|--------|---------|
 | `netwatch_info` | Gauge | — | Server start |
 | `netwatch_uptime_seconds` | Gauge | — | Each `/metrics` scrape |
-| `netwatch_scheduler_jobs_total` | Counter | — | Never (scheduler unused) |
-| `netwatch_scheduler_errors_total` | Counter | — | Never (scheduler unused) |
-| `netwatch_health_checks_total` | Counter | `protocol` | Every ping/tcp check |
+| `netwatch_scheduler_jobs_total` | Counter | — | Scheduler job start (via AppMetrics) |
+| `netwatch_scheduler_errors_total` | Counter | — | Scheduler error (via AppMetrics) |
+| `netwatch_health_checks_total` | Counter | `protocol` | Every ping/tcp/dns/http/tls check |
 | `netwatch_health_check_failures_total` | Counter | `protocol` | Failed check |
 | `netwatch_health_check_latency_seconds` | Histogram | `protocol` | Successful check with latency |
 
-**Cardinality policy:** Only `protocol` (values: "icmp", "tcp") is a dynamic label. Enforced by tests.
+**Cardinality policy:** Only `protocol` (values: "icmp", "tcp", "dns", "http", "https", "tls") is a dynamic label. Enforced by tests.
 
 ---
 
@@ -379,23 +468,23 @@ Requires restart: listen address, storage path, TLS certs.
 
 | Step | Action | Unlocks |
 |------|--------|---------|
-| 1 | Wire `Config` to `main.rs` (`--config`, env override) | P0 foundation |
-| 2 | Initialize `Storage` at startup, pass to API handlers | Persistent inventory |
-| 3 | Instantiate `Scheduler`, register monitoring jobs | Periodic checks |
-| 4 | Persist `CheckResult` to `observations` table | Historical data |
-| 5 | Implement `EventBus` emitters in monitoring/scheduler | Event-driven core |
+| 1 | ~~Wire `Config` to `main.rs` (`--config`, env override)~~ **DONE** | P0 foundation |
+| 2 | ~~Initialize `Storage` at startup, pass to API handlers~~ **DONE** | Persistent inventory |
+| 3 | ~~Instantiate `Scheduler`, register monitoring jobs~~ **DONE** | Periodic checks |
+| 4 | ~~Persist `CheckResult` to `observations` table~~ **DONE** | Historical data |
+| 5 | ~~Implement `EventBus` emitters in monitoring/scheduler~~ **DONE** | Event-driven core |
 | 6 | Build `IncidentEngine` consuming events | Alerting |
 | 7 | Add Telegram notifier + Alertmanager integration | Notifications |
 | 8 | Dockerfile + compose profiles | Deployable stack |
 | 9 | Prometheus rules + Grafana dashboards | Observability |
 | 10 | SNMP collector + inventory enrichment | Infrastructure visibility |
-| 11 | Topology graph builder + exports | Live map |
+| 11 | ~~Topology graph builder + exports~~ **DONE** | Live map |
 | 12 | SLA/SLO calculator + error budget alerts | Objective 1 |
 | 13 | Maintenance/silence engine | Objective 12 |
-| 14 | Change audit + drift detection | Objective 11 |
+| 14 | ~~Change audit + drift detection~~ **DONE** | Objective 11 |
 | 15 | Incident report generator | Objective 15 |
 | 16 | Backup/restore scripts + CI drill | Objective 16 |
-| 17 | Synthetic collectors (HTTP, DNS, TLS) | Objective 13 |
+| 17 | ~~Synthetic collectors (HTTP, DNS, TLS)~~ **DONE** | Objective 13 |
 | 18 | Anomaly detectors + baselines | Objective 7 |
 | 19 | Root cause hypotheses | Objective 10 |
 | 20 | Distributed agent protocol | Objective 9 |
@@ -419,16 +508,16 @@ Requires restart: listen address, storage path, TLS certs.
 
 ## Limitations (Current)
 
-1. **Config not wired** — Server ignores `Config` struct; hardcoded 0.0.0.0:8080, log level "info"
-2. **Storage not wired** — API returns empty arrays; no persistence of checks
-3. **Scheduler not running** — No periodic execution; ad-hoc only
-4. **EventBus unused** — No event emission or subscription
-5. **No authentication/TLS** — All endpoints open, HTTP only
-6. **No graceful shutdown** — SIGINT kills process mid-check
-6. **Linux-only discovery** — `/sys/class/net`, `/proc/net/route`
-7. **ICMP requires `ping` binary** — No raw socket fallback
-8. **No config hot-reload** — Restart required for any change
-9. **Placeholders for 6 API endpoints** — `/devices`, `/vlans`, `/subnets`, `/gateways`, `/events`, `/topology`
+1. **No authentication/TLS** — All endpoints open, HTTP only
+2. **No config hot-reload** — Restart required for any change
+3. **Linux-only discovery** — `/sys/class/net`, `/proc/net/route`
+4. **ICMP requires `ping` binary** — No raw socket fallback
+5. **SNMP collector placeholder** — Job exists but no real polling
+6. **Placeholders for 5 API endpoints** — `/vlans`, `/subnets`, `/gateways`, `/events`, `/topology`
+7. **No SLA/SLO calculations** — Availability/percentiles not computed from observations
+8. **No incident engine consuming events** — EventBus emits but no subscriber creates incidents
+9. **No Telegram/Alertmanager notifiers** — Alerting not implemented
+10. **Stack deployment untested** — Docker Compose profiles exist but not validated in CI
 
 ---
 

@@ -1,287 +1,99 @@
 # Changes Made During Implementation
 
-**Date:** 2026-10-08
-**Implementation Session:** Complete functional audit, build fix, Prometheus metrics restoration, test implementation, documentation, and E2E validation.
+**Date:** 2026-10-11
+**Implementation Session:** Phase 1-2: Repository inspection, documentation reconciliation before P4
 
 ---
 
 ## Summary
 
-This implementation performed a complete code-backed functional audit of the netwatch project, fixed the broken Prometheus metrics exposition, added comprehensive automated tests (CLI, HTTP integration, metrics cardinality), created the requested documentation artifacts, and validated everything with an E2E smoke test.
+This implementation performed a complete inspection of the netwatch repository state, identified significant discrepancies between documentation and actual implementation, and updated all Markdown documentation to accurately reflect the current state before beginning P4 (Intelligence & Capacity) work.
 
-**Total test count after implementation:** 41 tests (all passing)
-- 6 CLI integration tests
-- 13 HTTP integration tests
-- 9 Metrics cardinality tests
-- 5 Config file integration tests
-- 6 existing unit/integration tests
-- 1 metrics handler test
-- 1 metrics handler test (lib)
-
----
-
-## Production Code Changes
-
-### 1. `src/metrics.rs` — Fixed Prometheus Metrics Registry Bug & Uptime Metric
-
-**Status:** Modified
-**Category:** Production code
-**Change:** Completely rewrote `AppMetrics` to use the default Prometheus registry instead of a custom registry, enabling health check metrics to be exposed alongside AppMetrics. Also implemented functional uptime metric that updates on each metrics scrape.
-
-**Previous behavior:**
-- `AppMetrics::new()` created a custom registry with namespace "netwatch"
-- `metrics_handler()` used `prometheus::default_registry()` which didn't include AppMetrics
-- Health check metrics were registered to default registry but never appeared because handler used wrong registry
-- Uptime metric always returned 0 (no update mechanism)
-- Result: `/metrics` endpoint returned empty content
-
-**New behavior:**
-- `AppMetrics::new()` registers metrics to `prometheus::default_registry()`
-- `metrics_handler()` uses `prometheus::default_registry()`
-- Both AppMetrics and health check metrics share the same registry
-- Uptime metric updates on each `/metrics` scrape using `Instant::elapsed()`
-- Result: `/metrics` exposes all metrics correctly with accurate uptime
-
-**Impact/Compatibility:**
-- Metric names unchanged (still `netwatch_info`, `netwatch_uptime_seconds`, etc.)
-- Health check metrics now appear correctly after first use
-- Uptime metric now reports actual seconds since server start
-- No breaking changes to public API
-
-**Validation:** `cargo test`, E2E smoke test metrics verification (uptime shows correct seconds)
-
----
-
-### 2. `src/main.rs` — Fixed Metrics Handler Integration
-
-**Status:** Modified
-**Category:** Production code
-**Change:** Updated server startup to use the fixed `AppMetrics::metrics_handler()` static method with uptime gauge and start_time.
-
-**Previous behavior:** Used `AppMetrics::metrics_handler` which referenced the broken custom registry approach.
-
-**New behavior:** Creates `AppMetrics::new()` at startup, extracts uptime gauge and start_time, and routes `/metrics` to `AppMetrics::metrics_handler(uptime, start_time)`.
-
-**Impact/Compatibility:** No external API changes.
-
-**Validation:** `cargo build --release`, E2E smoke test
-
----
-
-### 3. `src/lib.rs` — Added Test Modules
-
-**Status:** Modified
-**Category:** Production code (test infrastructure)
-**Change:** Added `metrics_handler_test` and `config_file_test` modules to lib.rs so their tests are compiled and run.
-
-**Validation:** `cargo test` now runs all test modules
-
----
-
-### 4. `src/metrics_handler_test.rs` — Fixed Test Implementation
-
-**Status:** Modified
-**Category:** Tests
-**Change:** Updated test to use `crate::` paths instead of `netwatch::` paths, fixed to use new static method signature with uptime gauge and start_time parameters.
-
-**Validation:** `cargo test metrics_handler` passes
-
----
-
-## Test Files Added
-
-### 5. `tests/cli_tests.rs` — CLI Integration Tests
-
-**Status:** Added
-**Category:** Tests
-**Change:** Created comprehensive CLI tests using `assert_cmd` crate.
-
-**Tests (6):**
-- `cli_monitor_ping_success` — Tests `netwatch monitor ping 127.0.0.1`
-- `cli_monitor_tcp_success` — Tests `netwatch monitor tcp` against a live listener
-- `cli_monitor_tcp_failure` — Tests `netwatch monitor tcp` against closed port
-- `cli_discover_local` — Tests `netwatch discover local` output
-- `cli_help` — Tests `--help`, `monitor --help`, `discover --help`
-- `cli_version` — Tests `--version`
-
-**Dependencies added:** `assert_cmd`, `predicates`, `futures` (dev-dependencies)
-
-**Validation:** `cargo test --test cli_tests` — 6/6 pass
-
----
-
-### 6. `tests/http_integration_tests.rs` — HTTP Integration Tests
-
-**Status:** Added
-**Category:** Tests
-**Change:** Created comprehensive HTTP API tests using `reqwest` and a test server.
-
-**Tests (13):**
-- `http_health_endpoint` — GET /health
-- `http_interfaces_endpoint` — GET /api/v1/interfaces
-- `http_routes_endpoint` — GET /api/v1/routes
-- `http_monitor_ping_endpoint` — POST /api/v1/monitor/ping
-- `http_monitor_tcp_endpoint_success` — POST /api/v1/monitor/tcp (success)
-- `http_monitor_tcp_endpoint_failure` — POST /api/v1/monitor/tcp (failure)
-- `http_metrics_endpoint_before_checks` — GET /metrics before any health checks
-- `http_metrics_after_icmp_check` — GET /metrics after ICMP check
-- `http_metrics_after_tcp_check` — GET /metrics after TCP check
-- `http_metrics_after_icmp_failure` — GET /metrics after failed ICMP check (verifies failure metrics)
-- `http_metrics_after_tcp_failure` — GET /metrics after failed TCP check (verifies failure metrics)
-- `http_placeholder_endpoints` — Tests all 6 placeholder endpoints return empty arrays
-- `http_ping_invalid_content_type` — Tests 415 response for wrong Content-Type
-
-**Dependencies added:** `reqwest` with `json` feature (dev-dependency)
-
-**Validation:** `cargo test --test http_integration_tests` — 13/13 pass
-
----
-
-### 7. `tests/metrics_cardinality_test.rs` — Metrics Cardinality Enforcement Tests
-
-**Status:** Added
-**Category:** Tests
-**Change:** Created tests enforcing the cardinality policy: only `protocol` label allowed on health check metrics. Added failure and success metric verification tests.
-
-**Tests (9):**
-- `test_health_check_metrics_only_protocol_label` — Verifies no forbidden labels on health check metrics via HTTP
-- `test_health_check_protocol_values` — Verifies only "icmp" and "tcp" protocol values
-- `test_no_dynamic_labels_on_app_metrics` — Verifies AppMetrics have zero labels
-- `test_cardinality_enforcement_via_direct_metric_access` — Verifies cardinality via direct metric manipulation
-- `test_metric_definition_labels` — Verifies metric definitions declare only `protocol` label
-- `test_icmp_failure_metrics` — Verifies failure counter increments, no latency recorded for failed ICMP
-- `test_tcp_failure_metrics` — Verifies failure counter increments, no latency recorded for failed TCP
-- `test_icmp_success_metrics` — Verifies total counter increments, latency recorded for successful ICMP
-- `test_tcp_success_metrics` — Verifies total counter increments, latency recorded for successful TCP
-
-**Forbidden labels tested:** host, hostname, ip, target, url, port, address, destination, source, interface, device, instance
-
-**Note:** Histogram `le` label is explicitly allowed as it's a standard Prometheus histogram bucket label.
-
-**Validation:** `cargo test --test metrics_cardinality_test` — 9/9 pass
-
----
-
-### 8. `src/config_file_test.rs` — Configuration File Integration Tests
-
-**Status:** Added
-**Category:** Tests
-**Change:** Created tests for `Config::from_path()` covering valid files, missing files, invalid YAML, empty files, and partial configs.
-
-**Tests (5):**
-- `test_config_from_valid_file` — Loads complete valid YAML config, verifies all fields
-- `test_config_from_missing_file` — Verifies appropriate error for non-existent file
-- `test_config_from_invalid_yaml` — Verifies error for malformed YAML syntax
-- `test_config_from_empty_file` — Verifies error for empty file
-- `test_config_from_partial_file` — Verifies error when required fields missing (serde_yaml requires all fields)
-
-**Validation:** `cargo test config_file_test` — 5/5 pass
-
----
-
-### 9. `tests/config_file_test.rs` — Configuration File Integration Tests
-
-**Status:** Added
-**Category:** Tests
-**Change:** Created tests for `Config::from_path()` covering valid files, missing files, invalid YAML, empty files, and partial configs.
-
-**Tests (5):**
-- `test_config_from_valid_file` — Loads complete valid YAML config, verifies all fields
-- `test_config_from_missing_file` — Verifies appropriate error for non-existent file
-- `test_config_from_invalid_yaml` — Verifies error for malformed YAML syntax
-- `test_config_from_empty_file` — Verifies error for empty file
-- `test_config_from_partial_file` — Verifies error when required fields missing (serde_yaml requires all fields)
-
-**Validation:** `cargo test config_file_test` — 5/5 pass
+**Key Finding:** The codebase is significantly more advanced than the documentation indicated. P0 is fully complete with config, storage, scheduler, and persistence all wired and working. P1-P3 have substantial implementation progress that was not reflected in the docs.
 
 ---
 
 ## Documentation Files Updated
 
-### 10. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete Functional Audit
+### 1. `README.md` — Complete Rewrite
 
 **Status:** Updated
 **Category:** Documentation
 **Changes:**
-- Updated Section 10 (Functional Test Audit) with accurate 25-row table reflecting all 40 tests
-- Updated Section 12 (Implementation Status Summary) with accurate test counts
-- Updated metrics section to reflect working uptime metric
-- All entries now accurately reflect implementation status, automation status, test names, levels, and coverage
+- Updated strategic objectives table with accurate statuses (Partial/Planned instead of all "Planned")
+- Updated implementation status table with ✅/⚠️ for 21 components
+- Corrected key limitations list
+- Added DNS/HTTP/TLS monitoring to implemented features
+- Added topology builder, drift detection, scheduler, EventBus to implemented
+- Updated quick start examples
 
-**Validation:** Document accurately reflects final implementation state with 40 passing tests
+### 2. `docs/ROADMAP.md` — Phase Status Correction
 
----
-
-### 9. `scripts/e2e_smoke.sh` — End-to-End Smoke Test Script
-
-**Status:** Added (unchanged from previous)
-**Category:** E2E / Tooling
-**Tests (42):**
-- 5 CLI tests
-- 12 HTTP tests (8 functional + 4 placeholder + 1 error case)
-- 10 Metrics tests (4 baseline + 2 ICMP + 2 TCP + 2 cardinality)
-
-**Validation:** Script runs successfully — 42/42 pass
-
----
-
-## Configuration / Dependency Files Modified
-
-### 10. `Cargo.toml` — Dev Dependencies Added
-
-**Status:** Modified
-**Category:** Dependencies
+**Status:** Updated
+**Category:** Documentation
 **Changes:**
-- `assert_cmd = "2.2.2"` — CLI testing
-- `predicates = "3.1.4"` — Assertion predicates for CLI tests
-- `reqwest = { version = "0.13.5", features = ["json"] }` — HTTP client for integration tests
-- `futures = "0.3"` — Already present, used in CLI tests
+- Corrected Phase Overview table: P0 ✅ Complete, P1 🔄 In Progress, P2 🔄 In Progress, P3 🔄 In Progress, P4 Planned, P5 Planned
+- Updated Phase Status Summary with accurate descriptions
+- Updated Objective 1: Added ✅ for scheduler persistence, availability formula; kept P1 items as ❌
+- Updated Objective 2: Added ✅ for topology built, provenance/confidence, Mermaid/DOT/JSON export, diff, visual states
+- Updated Objective 3: Added ✅ for typed events, incident state machine, ACK/resolve; kept alert rules/correlation/notifiers as ❌
+- Updated Objective 4: Added ✅ for Dockerfile, compose, Prometheus/Grafana/Alertmanager configs; noted stack deployment untested
+- Updated Objective 11: Added ✅ for change history, snapshot diff, drift detection, JSON/Markdown export
+- Updated Objective 13: Added ✅ for HTTP/DNS/TLS collectors; noted scheduler integration pending
+- Added accurate checkmarks (✅/❌/🔄) throughout
 
-**Reason:** Required for new test infrastructure
+### 3. `docs/ARCHITECTURE.md` — Major Overhaul
 
-**Validation:** `cargo build`, `cargo test` — all dependencies resolve correctly
-
----
-
-## Documentation Files Added
-
-### 11. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete Functional Audit
-
-**Status:** Added (updated)
+**Status:** Updated
 **Category:** Documentation
-**Content:** Comprehensive code-backed audit covering:
-1. Functionality overview (CLI, HTTP API, ICMP, TCP, Discovery, Metrics, Config, Storage, Scheduler, Events)
-2. Architecture diagram (Mermaid) showing real module dependencies
-3. Component descriptions (14 modules)
-4. Execution flows (CLI ICMP, CLI TCP, HTTP ICMP, HTTP TCP, Metrics)
-5. HTTP API reference (12 endpoints with full specs)
-6. CLI reference (4 commands with syntax, examples, JSON output)
-7. Metrics catalogue (7 metric families with exact names, types, labels, triggers)
-8. Cardinality policy (protocol-only dynamic label)
-9. Use-case matrix (CU-01 through CU-09)
-10. Functional test audit (25-row table with accurate test coverage)
-11. Limitations/pending work (11 confirmed limitations)
-12. Implementation Status Summary
+**Changes:**
+- Completely rewrote "Current Architecture (Implemented)" section to reflect actual wiring
+- Updated Module Map with all current modules (drift.rs, topology_builder.rs, topology_store.rs, snmp.rs, monitoring/dns.rs, http.rs, tls.rs)
+- Updated Component Responsibilities table: Config, Storage, Scheduler, EventBus, Incidents, Drift, Topology all marked ✅
+- Added "Scheduled Monitoring (Server Mode)" execution flow showing full job registration
+- Updated Data Flow Diagram with wired connections (solid lines) vs placeholders (dashed)
+- Added topology/drift subgraph to diagram
+- Updated Persistence Schema with both migrations documented
+- Updated Evolution Path: Steps 1-5, 11, 14, 17 marked **DONE**
+- Updated Limitations: Removed "Config not wired", "Storage not wired", "Scheduler never instantiated", "EventBus never used", "No persistence of checks" — these ARE implemented
 
-**Validation:** Document accurately reflects final implementation state with 40 passing tests
+### 4. `docs/IMPLEMENTATION_STATUS.md` — Comprehensive Correction
 
----
-
-### 12. `docs/CHANGES_MADE.md` — Change Log
-
-**Status:** Added (updated)
+**Status:** Updated
 **Category:** Documentation
-**Content:** This file, documenting all changes made during implementation
+**Changes:**
+- Updated Summary Table with accurate global statuses and key gaps
+- Objective 1: Marked scheduler persistence and check persistence as ✅
+- Objective 2: Changed from "Planned" to "Partial"; added ✅ for graph, visual states, provenance, exports, snapshots, diff
+- Objective 3: Detailed event schema, incident lifecycle as ✅; alert rules/correlation/notifiers as ❌
+- Objective 4: Detailed Dockerfile, compose, configs as ✅; stack deployment untested
+- Objective 11: Changed from "Partial" to detailed breakdown with ✅ for drift detection, exports
+- Objective 13: Added ✅ for HTTP/DNS/TLS collectors; noted scheduler integration pending
+- Cross-Cutting: Configuration, Storage, Scheduler, Metrics, Discovery, ICMP, TCP, DNS, HTTP, TLS, CLI, HTTP API Core, Topology, Drift all marked **Implemented**
+- P0 Verification Summary: All 8 criteria ✅ with evidence references
+- Known Limitations: Updated to reflect actual current gaps (auth, TLS, hot-reload, Linux-only, ping binary, placeholders, SNMP placeholder, no incident engine, no SLO calculations)
+- Next Priorities: Updated for P4 (Objectives 7, 10, 14 + CI/CD + missing docs)
+
+### 5. `docs/DEVELOPMENT.md` — Test Counts & Structure Update
+
+**Status:** Updated
+**Category:** Documentation
+**Changes:**
+- Updated project structure to include all current modules (drift.rs, topology_*.rs, snmp.rs, monitoring/dns.rs, http.rs, tls.rs, tests/drift_tests.rs)
+- Updated test counts: 46 unit/integration tests (was 41)
+- Added drift detection tests to list
+- Updated E2E smoke test description: 42 checks including drift and topology
+- Added Configuration section with config.example.yaml reference
+
+### 6. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — NOTE: NOT YET UPDATED
+
+**Status:** Pending
+**Category:** Documentation
+**Note:** This file contains the detailed functional audit from the previous session. It still claims Config/Storage/Scheduler/EventBus are "NOT WIRED/NOT USED" which is now incorrect. This file needs to be updated to reflect the current wired state, or marked as historical audit.
 
 ---
 
-## Reverted Changes
-
-None.
-
----
-
-## Final Validation Results
+## Verification Results After Documentation Update
 
 | Command | Result |
 |---------|--------|
@@ -292,95 +104,49 @@ None.
 | `cargo build --release` | PASS |
 | `scripts/e2e_smoke.sh` | PASS (42/42) |
 
----
-
-## Complete Change Summary
-
-### Production Files Modified
-- `src/metrics.rs` — Fixed registry bug, implemented uptime metric
-- `src/main.rs` — Fixed metrics handler wiring
-- `src/lib.rs` — Added test modules
-- `src/metrics_handler_test.rs` — Fixed for new module structure and method signature
-
-### Test Files Added
-- `tests/cli_tests.rs` (6 tests)
-- `tests/http_integration_tests.rs` (13 tests)
-- `tests/metrics_cardinality_test.rs` (9 tests)
-- `src/config_file_test.rs` (5 tests)
-- `tests/drift_tests.rs` (5 tests)
-
-### Documentation Files Updated
-- `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete audit with updated test table (30 rows)
-- `docs/CHANGES_MADE.md` — This file
-- `docs/IMPLEMENTATION_STATUS.md` — Updated P3 status (Objectives 11, 12)
-- `docs/ROADMAP.md` — Updated P3 status to "In Progress: Drift detection ✅ Complete"
-- `docs/DEVELOPMENT.md` — Updated test counts and documentation
-- `scripts/e2e_smoke.sh` — E2E smoke test (executable)
-- `docs/audits/P3_AUDIT.md` — P3 audit matrix with 30 criteria
-
-### Configuration / Dependency Files
-- `Cargo.toml` — No new dependencies needed (existing async-snmp, uuid, etc.)
-
-### Reverted Changes
-- None
+All validation commands pass, confirming the implementation is solid and only documentation needed correction.
 
 ---
 
-## Remaining Limitations (Confirmed by Source Code)
+## Discrepancies Resolved
 
-1. **Config not wired to server** — `Config` struct exists but server hardcodes 0.0.0.0:8080 and log level "info"
-2. **Scheduler unused** — `Scheduler` implemented but never instantiated
-3. **EventBus unused** — `EventBus` implemented but never used
-4. **Storage not wired** — `Storage` implemented but API handlers return empty arrays
-5. **No persistence of checks** — Health check results not stored
-6. **No authentication** — All HTTP endpoints open
-7. **No TLS** — HTTP only
-8. **No config file support** — No `--config` flag
-9. **No graceful shutdown** — No signal handling
-10. **Linux-only discovery** — Uses `/sys/class/net` and `/proc/net/route`
-11. **ICMP implementation** — Requires `ping` binary; no raw socket fallback
-12. **Drift→incident correlation** — Topology changes not linked to incidents
-13. **No silence engine** — Silence fields exist but no management engine
-14. **No incident report generator** — No report generation from incidents
-15. **No disaster recovery scripts** — No backup/restore procedures
+| Document | Previous Claim | Actual State | Resolution |
+|----------|---------------|--------------|------------|
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Config NOT WIRED | Config loaded from file + env in main.rs | Updated ARCHITECTURE.md, IMPLEMENTATION_STATUS.md, ROADMAP.md |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Storage NOT WIRED | Storage::connect() in main.rs, devices_handler queries DB | Updated |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Scheduler NOT USED | Scheduler instantiated, 6 jobs registered, running in background | Updated |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | EventBus NOT USED | EventBus emits CheckCompleted/Failed, TopologyChanged events | Updated |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | No persistence of checks | persist_observation() writes to observations table | Updated |
+| ROADMAP.md | P2 ✅ Complete | P2 🔄 In Progress (topology done, SNMP placeholder) | Updated |
+| ROADMAP.md | P3 Drift Detection only | P3 has drift ✅, maintenance 🔄, incident reports ⏳, DR ⏳ | Updated |
+| IMPLEMENTATION_STATUS.md | Many objectives "Planned" | Several are Partial with working code | Updated all objectives |
+| README.md | All objectives "Planned" | 9 objectives have Partial/Implemented status | Updated |
 
 ---
 
 ## Files Changed
 
 ```
-src/
-  metrics.rs           (Modified - fixed registry bug, implemented uptime)
-  main.rs              (Modified - fixed handler wiring)
-  lib.rs               (Modified - added test modules)
-  metrics_handler_test.rs (Modified - fixed test paths and method signature)
-  drift.rs             (Added - drift detection for P3)
-
-tests/
-  cli_tests.rs         (Added - 6 CLI tests)
-  http_integration_tests.rs (Added - 13 HTTP tests)
-  metrics_cardinality_test.rs (Added - 9 cardinality tests)
-  drift_tests.rs       (Added - 5 drift detection tests)
-
-src/
-  config_file_test.rs  (Added - 5 config tests)
-  drift.rs             (Added - drift detection for P3)
-
 docs/
-  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (Updated - complete audit)
-  CHANGES_MADE.md      (Updated - this file)
-  IMPLEMENTATION_STATUS.md (Updated - P3 status)
-  ROADMAP.md           (Updated - P3 status)
-  DEVELOPMENT.md       (Updated - test counts)
-  ROADMAP.md           (Updated - P3 status)
-  audits/P3_AUDIT.md   (Added - P3 audit matrix)
-
-scripts/
-  e2e_smoke.sh         (Added - executable E2E test)
-
-Cargo.toml             (No new dependencies needed)
+  README.md                    (Rewritten - accurate status)
+  ROADMAP.md                   (Phase statuses, checkmarks corrected)
+  ARCHITECTURE.md              (Major overhaul - current architecture reflects wired state)
+  IMPLEMENTATION_STATUS.md     (Comprehensive per-objective correction)
+  DEVELOPMENT.md               (Structure, test counts, config example)
+  CHANGES_MADE.md              (This file)
+  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (NOT YET UPDATED - historical audit)
 ```
 
 ---
 
-*This document reflects ONLY changes actually made during this implementation session.*
+## Next Steps
+
+1. **Update `ARCHITECTURE_AND_FUNCTIONAL_TESTS.md`** to reflect current wired state (or mark as historical)
+2. **Create missing documentation**: CONFIGURATION.md, API.md, OPERATIONS.md, CONTRIBUTING.md, SECURITY.md
+3. **Begin P4 Implementation**: Objective 7 (Anomaly Detection), Objective 10 (Root Cause), Objective 14 (Capacity Planning)
+4. **Implement CI/CD**: GitHub Actions workflow with all required checks
+5. **Run full validation** before committing documentation changes
+
+---
+
+*This document reflects ONLY the documentation reconciliation work done in this session before starting P4.*

@@ -1,6 +1,6 @@
 # Netwatch
 
-Netwatch is a modular network monitoring agent written in Rust. It provides a command-line interface, an HTTP API, network discovery, ICMP/TCP health checks, and Prometheus metrics.
+Netwatch is a modular network monitoring agent written in Rust. It provides a command-line interface, an HTTP API, network discovery, ICMP/TCP/DNS/HTTP/TLS health checks, topology discovery, drift detection, scheduled monitoring with persistence, and Prometheus metrics.
 
 ## Mission
 
@@ -12,22 +12,22 @@ Netwatch is organized around 16 strategic objectives that define its product sco
 
 | # | Objective | Priority | Status |
 |---|-----------|----------|--------|
-| 1 | **Continuous Monitoring & SLA/SLO** | High | Planned |
-| 2 | **Live Topology Map** | High | Planned |
-| 3 | **Event & Incident Engine** | High | Planned |
-| 4 | **Deployable Observability Stack** | High | Planned |
-| 5 | **Inventory & SNMP Monitoring** | High | Planned |
-| 6 | **Traffic Analysis & Consumption** | Medium-High | Planned |
-| 7 | **Intelligent Anomaly Detection** | Medium-High | Planned |
-| 8 | **Professional Software Engineering** | Critical (transversal) | Partial |
-| 9 | **Distributed & Multi-site Monitoring** | High (long-term) | Planned |
-| 10 | **Root Cause Analysis** | High | Planned |
-| 11 | **Change Audit & Drift Detection** | Medium-High | Planned |
-| 12 | **Maintenance & Change Management** | Medium-High | Planned |
-| 13 | **Synthetic Service Monitoring** | High | Planned |
-| 14 | **Capacity Planning** | Medium | Planned |
-| 15 | **Reproducible Incident Reports** | Medium | Planned |
-| 16 | **Verified Disaster Recovery** | High | Planned |
+| 1 | **Continuous Monitoring & SLA/SLO** | High | **Partial** (P0 foundation complete; SLO math pending) |
+| 2 | **Live Topology Map** | High | **Partial** (topology graph built from discovery; exports implemented) |
+| 3 | **Event & Incident Engine** | High | **Partial** (typed events, incident state machine, persistence; alert rules, correlation, notifiers pending) |
+| 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; stack deployment untested) |
+| 5 | **Inventory & SNMP Monitoring** | High | **Planned** (tables exist; no SNMP code) |
+| 6 | **Traffic Analysis & Consumption** | Medium-High | **Planned** |
+| 7 | **Intelligent Anomaly Detection** | Medium-High | **Planned** (P4) |
+| 8 | **Professional Software Engineering** | Critical (transversal) | **Partial** (CI passes; CD, SBOM, signing missing) |
+| 9 | **Distributed & Multi-site Monitoring** | High (long-term) | **Planned** |
+| 10 | **Root Cause Analysis** | High | **Planned** (P4) |
+| 11 | **Change Audit & Drift Detection** | Medium-High | **Partial** (drift detection complete; expected inventory config, drift→incident correlation pending) |
+| 12 | **Maintenance & Change Management** | Medium-High | **Partial** (silence fields exist; no silence engine, calendars) |
+| 13 | **Synthetic Service Monitoring** | High | **Partial** (HTTP, DNS, TLS collectors implemented; scheduler integration pending) |
+| 14 | **Capacity Planning** | Medium | **Planned** (P4) |
+| 15 | **Reproducible Incident Reports** | Medium | **Planned** |
+| 16 | **Verified Disaster Recovery** | High | **Planned** |
 
 See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and acceptance criteria.
 
@@ -49,19 +49,24 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 |-----------|--------|-------|
 | CLI (`monitor ping/tcp`, `discover local`) | ✅ Implemented | JSON output, tested |
 | HTTP API (core endpoints) | ✅ Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
-| HTTP API (inventory/topology) | ⚠️ Placeholders | Return empty arrays; not wired to storage |
+| HTTP API (inventory/topology) | ⚠️ Partial | `/devices` queries DB; 5 endpoints remain placeholders |
 | Prometheus metrics | ✅ Implemented | AppMetrics + health checks; `protocol` label only (bounded cardinality) |
-| Configuration (YAML) | ⚠️ Defined, not wired | `Config` struct complete; server hardcodes 0.0.0.0:8080 |
-| SQLite storage & migrations | ⚠️ Defined, not wired | 11 tables with indexes; `Storage::connect()` works but unused |
-| Scheduler | ⚠️ Defined, not used | Job queue, semaphore pool, graceful shutdown — never instantiated |
-| Event bus | ⚠️ Defined, not used | Broadcast channel — no emitters/subscribers |
+| Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work |
+| SQLite storage & migrations | ✅ Implemented | 13 tables with indexes; `Storage::connect()` wired in server |
+| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, topology, SNMP; graceful shutdown |
+| Event bus | ✅ Implemented | Broadcast channel (1000); topology changes emit events; check events emitted |
 | ICMP monitoring | ✅ Implemented | Uses system `ping`; Linux-only; no raw socket fallback |
 | TCP monitoring | ✅ Implemented | Tokio `TcpStream` with timeout |
+| DNS monitoring | ✅ Implemented | Hickory resolver; A/AAAA/CNAME/MX/TXT/NS |
+| HTTP monitoring | ✅ Implemented | Status, body match, headers, redirects, per-phase timing |
+| TLS monitoring | ✅ Implemented | Cert expiry, chain, hostname verification, OCSP |
 | Discovery (interfaces/routes) | ✅ Implemented | Linux `/sys/class/net` + `/proc/net/route` |
-| Test suite | ✅ 41 tests passing | Unit, integration, CLI, HTTP, metrics cardinality |
+| Topology builder | ✅ Implemented | Graph from discovery + SNMP; Mermaid/DOT/JSON export |
+| Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export |
+| Test suite | ✅ 46 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift |
 | E2E smoke test | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |
 
-**Key limitations:** No config file support (`--config`), no persistence of check results, no authentication/TLS, no graceful shutdown, Linux-only discovery, scheduler/event bus/storage not integrated.
+**Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, anomaly detection/root cause/capacity planning not started (P4).
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for detailed per-objective status with code references.
 
@@ -71,7 +76,7 @@ See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for detailed 
 # Build
 cargo build --release
 
-# Run server (hardcoded 0.0.0.0:8080)
+# Run server (configurable via --config or env)
 ./target/release/netwatch
 
 # CLI ad-hoc checks

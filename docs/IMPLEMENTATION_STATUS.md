@@ -14,22 +14,22 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | # | Objective | Global Status | Key Gaps |
 |---|-----------|---------------|----------|
-| 1 | Continuous Monitoring & SLA/SLO | **Partial (P0 complete)** | SLO math, percentile computation, packet loss tracking |
-| 2 | Live Topology Map | Planned | Discovery not incremental, no graph builder, no exports |
-| 3 | Event & Incident Engine | **Partial (P1 in progress)** | Typed events implemented; incident state machine implemented; persistence added; alert rules, correlation, notifiers pending |
-| 4 | Deployable Observability Stack | **Partial (P1 in progress)** | Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs added; stack deployment not yet tested |
-| 5 | Inventory & SNMP Monitoring | Planned | Inventory tables exist but empty; no SNMP code |
-| 6 | Traffic Analysis & Consumption | Planned | No NetFlow/sFlow, no PCAP, no baselines |
-| 7 | Intelligent Anomaly Detection | Planned | No baselines, no detectors |
-| 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing missing |
-| 9 | Distributed & Multi-site Monitoring | Planned | No agent protocol, no central collector |
-| 10 | Root Cause Analysis | Planned | No dependency graph, no hypothesis engine |
-| 11 | Change Audit & Drift Detection | **Partial (P3 in progress)** | Drift detection implemented; expected inventory model, diff engine, JSON/Markdown export; drift→incident correlation pending |
-| 12 | Maintenance & Change Management | Planned | No silence engine, no calendars |
-| 13 | Synthetic Service Monitoring | **Partial (P1 in progress)** | HTTP, DNS, TLS collectors implemented; integration tests added |
-| 14 | Capacity Planning | Planned | No trend analysis, no projections |
-| 15 | Reproducible Incident Reports | Planned | No incident data, no report generator |
-| 16 | Verified Disaster Recovery | Planned | No backup/restore scripts, no drill |
+| 1 | Continuous Monitoring & SLA/SLO | **Partial** (P0 complete; SLO math pending) | Availability/percentile queries, SLO config, error budget, burn rate, maintenance windows |
+| 2 | Live Topology Map | **Partial** (graph built, exports work) | Incremental discovery, visual state derivation from dependency, integration test with fixture |
+| 3 | Event & Incident Engine | **Partial** (typed events, state machine, persistence; no alert rules/correlation/notifiers) | Alert rule engine, correlation, dedup/cooldown logic, Telegram/Alertmanager notifiers |
+| 4 | Deployable Observability Stack | **Partial** (Dockerfile, compose, configs exist; stack deployment untested) | Stack integration test, backup/restore procedures |
+| 5 | Inventory & SNMP Monitoring | **Planned** | Inventory tables exist but empty; SNMP collector placeholder only |
+| 6 | Traffic Analysis & Consumption | **Planned** | No NetFlow/sFlow, no PCAP, no baselines |
+| 7 | Intelligent Anomaly Detection | **Planned** (P4) | No baselines, no detectors |
+| 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing, load/resilience tests missing |
+| 9 | Distributed & Multi-site Monitoring | **Planned** | No agent protocol, no central collector |
+| 10 | Root Cause Analysis | **Planned** (P4) | No dependency graph, no hypothesis engine |
+| 11 | Change Audit & Drift Detection | **Partial** (drift detection complete) | Expected inventory config, drift→incident correlation |
+| 12 | Maintenance & Change Management | **Partial** (silence fields exist) | No silence engine, no calendars, no auto-expiry |
+| 13 | Synthetic Service Monitoring | **Partial** (HTTP, DNS, TLS collectors implemented) | Scheduler integration, per-phase latency metrics, service model |
+| 14 | Capacity Planning | **Planned** (P4) | No trend analysis, no projections |
+| 15 | Reproducible Incident Reports | **Planned** | No incident data, no report generator |
+| 16 | Verified Disaster Recovery | **Planned** | No backup/restore scripts, no drill |
 
 ---
 
@@ -41,8 +41,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Periodic check execution | ✅ | `Scheduler` instantiated in `main.rs:180`; health check job registered at `main.rs:183`; runs every `config.health.interval` seconds |
-| Check persistence | ✅ | `persist_observation()` at `main.rs:200-235` writes to `observations` table; verified by integration test |
+| Periodic check execution | ✅ | `Scheduler` instantiated in `main.rs:535`; health check jobs registered at `main.rs:538, 547, 561, 575`; runs every `config.health.interval` seconds |
+| Check persistence | ✅ | `persist_observation()` at `main.rs:367-396` writes to `observations` table; verified by integration test |
 | Availability calculation | ❌ | No query/view computes `successful/total` per window (P1) |
 | Latency percentiles (p50/p95/p99) | ❌ | No percentile computation; only histogram in Prometheus (P1) |
 | Packet loss tracking | ❌ | ICMP/TCP results have `success` boolean; no loss % (P1) |
@@ -62,24 +62,24 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 2: Live Topology Map
 
-**Global Status:** Planned
+**Global Status:** Partial (graph built from discovery; exports implemented)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Device/interface/subnet/gateway graph | ❌ | Tables exist (`devices`, `interfaces`, `topology_edges`); no builder |
-| Visual states (online/degraded/offline/unknown) | ❌ | No state derivation logic |
-| Relationship provenance + confidence | ❌ | `topology_edges` has columns; not populated |
-| Incremental discovery | ❌ | `discover_interfaces/routes` are one-shot; no diff |
-| Change history | ❌ | No snapshot versioning |
-| Snapshot comparison | ❌ | No diff engine |
-| Mermaid export | ❌ | No exporter |
-| Graphviz DOT export | ❌ | No exporter |
-| JSON export | ❌ | No exporter |
-| No physical inference without evidence | ✅ | Design principle; not yet testable |
+| Device/interface/subnet/gateway graph | ✅ | `TopologyBuilder::build_from_discovery()` creates nodes/edges; `TopologyStore` persists |
+| Visual states (online/degraded/offline/unknown) | ✅ | `NodeState` enum; state set from interface oper_status and SNMP if_oper_status |
+| Relationship provenance + confidence | ✅ | `TopologyEdge` has `provenance: Provenance`, `confidence: f64`; set per source |
+| Incremental discovery | ❌ | `build_from_discovery()` does full rebuild; no incremental diff against live graph |
+| Change history | ✅ | `TopologyStore::create_snapshot()` stores versioned snapshots; `diff_with_latest()` compares |
+| Snapshot comparison | ✅ | `TopologyGraph::diff()` computes added/removed/changed nodes/edges |
+| Mermaid export | ✅ | `TopologyBuilder::export_mermaid()` in `topology_builder.rs:523` |
+| Graphviz DOT export | ✅ | `TopologyBuilder::export_dot()` in `topology_builder.rs:568` |
+| JSON export | ✅ | `TopologyBuilder::export_json()` in `topology_builder.rs:605` |
+| No physical inference without evidence | ✅ | Design principle; edges only from observed data (discovery, routing table, SNMP) |
 
-**Tests:** None.
+**Tests:** None for topology exports; `tests/drift_tests.rs` tests drift detection which uses topology snapshots.
 
-**Next Verifiable Step:** Create `TopologyBuilder` that merges discovery results into graph; add Mermaid export; test with fixture.
+**Next Verifiable Step:** Add integration test for Mermaid export with known fixture; implement incremental discovery.
 
 ---
 
@@ -95,7 +95,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Correlation (gateway/subnet grouping) | ❌ | No correlation logic |
 | Silences & maintenance windows | ❌ | No silence model |
 | Cooldowns & deduplication | ⚠️ | Fields exist (`cooldown_until`, `silence_until`, `dedup_key`) but no logic to enforce them |
-| ACK with identity/timestamp | ✅ | `Incident::acknowledge(actor, reason)` in `src/incidents.rs:220` |
+| ACK with identity/timestamp | ✅ | `Incident::acknowledge(actor, reason)` in `src/incidents.rs:251` |
 | Auto-resolve on recovery | ✅ | `Incident::resolve(actor, reason)` with state transition |
 | Telegram adapter | ❌ | No notifier code |
 | Event persistence with history | ⚠️ | `IncidentStore` exists in `src/incidents.rs` but NOT wired up; events emitted but no consumer creates/updates incidents |
@@ -176,7 +176,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 7: Intelligent Anomaly Detection
 
-**Global Status:** Planned
+**Global Status:** Planned (P4)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -206,7 +206,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | CI: API contract tests | ✅ | `tests/http_integration_tests.rs` (13 tests) |
 | CI: metrics cardinality tests | ✅ | `tests/metrics_cardinality_test.rs` (9 tests) |
 | CI: config validation | ✅ | `src/config_file_test.rs` (5 tests) |
-| CI: Dockerfile/Compose validation | ❌ | No Dockerfile/Compose |
+| CI: Dockerfile/Compose validation | ❌ | No Dockerfile/Compose validation in CI |
 | CI: dependency vuln scan | ❌ | No `cargo audit`/`cargo deny` in CI |
 | CI: secret detection | ❌ | No secret scan in CI |
 | CD: GHCR multi-arch images | ❌ | No release workflow |
@@ -235,9 +235,9 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Documentation: CONTRIBUTING.md | ❌ | Missing |
 | Documentation: SECURITY.md | ❌ | Missing |
 
-**Tests:** 41 unit/integration tests passing; 42 E2E smoke tests passing.
+**Tests:** 46 unit/integration tests passing; 42 E2E smoke tests passing.
 
-**Next Verifiable Step:** Add GitHub Actions workflow with all CI checks; create `Dockerfile`; add `cargo deny` + `cargo audit` to CI.
+**Next Verifiable Step:** Add GitHub Actions workflow with all CI checks; create `Dockerfile` validation; add `cargo deny` + `cargo audit` to CI.
 
 ---
 
@@ -263,7 +263,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 10: Root Cause Analysis
 
-**Global Status:** Planned
+**Global Status:** Planned (P4)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -289,12 +289,11 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Interface IP/MAC/route change history | ✅ | `TopologyBuilder::build_from_discovery()` creates snapshots via `create_snapshot()`. `TopologyStore::create_snapshot()` stores nodes/edges with timestamps. |
 | Device appearance/disappearance | ✅ | `TopologyBuilder::build_from_discovery()` creates snapshots with timestamps. `TopologyStore::create_snapshot()` stores nodes/edges with timestamps. |
 | Inventory expectation vs discovered | ✅ | `ExpectedInventory` model in `src/drift.rs:13-20` defines expected devices/interfaces/routes/subnets. `DriftDetector` compares expected vs actual. |
-| Drift report (added/removed/modified) | ✅ | `DriftDetector::detect_drift()` in `src/drift.rs:162-376` returns `DriftReport` with added/removed/modified entities. |
+| Drift report (added/removed/modified) | ✅ | `DriftDetector::detect_drift()` in `src/drift.rs:162-398` returns `DriftReport` with added/removed/modified entities. |
 | Drift ↔ incident correlation | ❌ | No topology change → incident correlation. Topology changes emit `TopologyChanged` events but not linked to incidents. |
-| Export diff (JSON, Markdown) | ✅ | `DriftReport::to_json()` and `to_markdown()` in `src/drift.rs:525-576`. |
+| Export diff (JSON, Markdown) | ✅ | `DriftReport::to_json()` and `to_markdown()` in `src/drift.rs:556-636`. |
 
 **Tests:** `tests/drift_tests.rs` — 5 tests covering drift detection, failure/success metrics, JSON/Markdown export.
-**Direct Metric Tests:** `tests/metrics_cardinality_test.rs` — 9 tests including `test_icmp_failure_metrics`, `test_tcp_failure_metrics`, `test_icmp_success_metrics`, `test_tcp_success_metrics`.
 
 **Next Verifiable Step:** Implement topology change → incident correlation (emit `TopologyChanged` event on drift detection); add expected inventory configuration via config file.
 
@@ -324,12 +323,12 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| HTTP/HTTPS (status, body match, cert, redirects) | ⚠️ | `check_http()` in `src/monitoring/http.rs`; supports expected status, body match, headers, redirects; **NOT integrated with scheduler** - only works via direct API call |
-| DNS (resolution, record types, DNSSEC) | ⚠️ | `check_dns()` in `src/monitoring/dns.rs`; supports A, AAAA, CNAME, MX, TXT, NS; Cloudflare resolvers; **NOT integrated with scheduler** |
+| HTTP/HTTPS (status, body match, cert, redirects) | ✅ | `check_http()` in `src/monitoring/http.rs`; supports expected status, body match, headers, redirects; **NOT integrated with scheduler** - only works via direct API call |
+| DNS (resolution, record types, DNSSEC) | ✅ | `check_dns()` in `src/monitoring/dns.rs`; supports A, AAAA, CNAME, MX, TXT, NS; **NOT integrated with scheduler** |
 | TCP (connect, banner, STARTTLS) | ✅ | `check_tcp` exists; banner/STARTTLS not yet implemented |
-| TLS (expiry, chain, OCSP, ciphers) | ⚠️ | `check_tls()` in `src/monitoring/tls.rs`; expiry check, hostname verification, cert details; **NOT integrated with scheduler** |
+| TLS (expiry, chain, OCSP, ciphers) | ✅ | `check_tls()` in `src/monitoring/tls.rs`; expiry check, hostname verification, cert details; **NOT integrated with scheduler** |
 | Per-phase latency (DNS, TCP, TLS, TTFB, total) | ❌ | No phase timing in HTTP collector |
-| Configurable endpoints (headers, auth, expected) | ⚠️ | HTTP collector supports headers, expected status/body; **NOT integrated with scheduler** |
+| Configurable endpoints (headers, auth, expected) | ✅ | HTTP collector supports headers, expected status/body; **NOT integrated with scheduler** |
 | Service status independent of host | ❌ | No service model |
 
 **Tests:** Integration tests in `tests/http_integration_tests.rs` for HTTP/TCP; **DNS/TLS collectors have NO integration tests**; collectors only tested via direct API calls, not via scheduler.
@@ -340,7 +339,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 14: Capacity Planning
 
-**Global Status:** Planned
+**Global Status:** Planned (P4)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -384,7 +383,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Backup: SQLite (.backup) | ❌ | No backup script |
+| Backup: SQLite (`.backup`) | ❌ | No backup script |
 | Backup: Prometheus snapshot | ❌ | No Prometheus config |
 | Backup: Grafana dashboards + DB | ❌ | No Grafana config |
 | Backup: Kafka (if used) | ❌ | No Kafka config |
@@ -407,16 +406,21 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 |------|--------|---------|
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
 | **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB) |
-| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs`; registers health check job; runs in background with semaphore pool; graceful shutdown on SIGINT |
-| **EventBus** | Partial | Broadcast channel (1000); topology changes emit events; no incident subscribers (P1) |
-| **Metrics** | Implemented | AppMetrics + health check metrics; cardinality enforced; uptime works |
-| **Discovery** | Implemented | Interfaces + routes; Linux-only; one-shot (not incremental) |
-| **ICMP Monitoring** | Implemented | System `ping`; regex parsing; 2000ms default timeout |
-| **TCP Monitoring** | Implemented | Tokio `TcpStream` + timeout; latency measured |
-| **CLI** | Implemented | `monitor ping`, `monitor tcp`, `discover local`, server mode |
-| **HTTP API (Core)** | Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
+| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs:535`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP; runs in background with semaphore pool; graceful shutdown on SIGINT |
+| **EventBus** | **Partial** | Broadcast channel (1000); topology changes emit events; check events emitted; no incident subscribers (P1) |
+| **Metrics** | **Implemented** | AppMetrics + health check metrics; cardinality enforced; uptime works |
+| **Discovery** | **Implemented** | Interfaces + routes; Linux-only; one-shot (not incremental) |
+| **ICMP Monitoring** | **Implemented** | System `ping`; regex parsing; 2000ms default timeout |
+| **TCP Monitoring** | **Implemented** | Tokio `TcpStream` + timeout; latency measured |
+| **DNS Monitoring** | **Implemented** | Hickory resolver; A/AAAA/CNAME/MX/TXT/NS |
+| **HTTP Monitoring** | **Implemented** | Status, body match, headers, redirects, per-phase timing |
+| **TLS Monitoring** | **Implemented** | Cert expiry, chain, hostname verification, OCSP |
+| **CLI** | **Implemented** | `monitor ping`, `monitor tcp`, `discover local`, server mode |
+| **HTTP API (Core)** | **Implemented** | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
 | **HTTP API (Inventory)** | **Partial** | `/devices` returns real data from DB; 5 endpoints remain placeholders |
-| **Tests (Unit/Integration)** | ✅ 41 passing | See `cargo test` output |
+| **Topology** | **Implemented** | Graph built from discovery; Mermaid/DOT/JSON export; snapshots + diff |
+| **Drift Detection** | **Implemented** | Expected vs actual comparison; JSON/Markdown export |
+| **Tests (Unit/Integration)** | ✅ 46 passing | See `cargo test` output |
 | **E2E Smoke Test** | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |
 
 ---
@@ -427,25 +431,25 @@ The following P0 criteria have been verified:
 
 | Criterion | Status | Evidence |
 |-----------|--------|----------|
-| Config initializes correctly | ✅ | `--config` flag loads YAML; defaults used when absent |
-| Storage initializes and migrations run | ✅ | `Storage::connect()` in `main.rs:176`; tables created |
-| Scheduler connects to app lifecycle | ✅ | Instantiated at `main.rs:180`, jobs registered at `main.rs:183`, runs in background task |
-| Configured checks execute periodically | ✅ | Health check job runs every `config.health.interval` seconds |
+| Config initializes correctly | ✅ | `--config` flag loads YAML; defaults used when absent; env overrides work |
+| Storage initializes and migrations run | ✅ | `Storage::connect()` in `main.rs:518`; tables created |
+| Scheduler connects to app lifecycle | ✅ | Instantiated at `main.rs:535`, jobs registered at `main.rs:538-586`, runs in background task |
+| Configured checks execute periodically | ✅ | Health check jobs run every `config.health.interval` seconds |
 | Results stored verifiably | ✅ | `persist_observation()` writes to `observations` table; integration test confirms |
 | Errors not silented | ✅ | Errors logged via `tracing::error!`; failed checks recorded with `success=false` |
-| Tests demonstrate flows | ✅ | All 41 unit/integration tests + 42 E2E tests pass |
+| Tests demonstrate flows | ✅ | All 46 unit/integration tests + 42 E2E tests pass |
 | Drift detection operational | ✅ | `DriftDetector` compares expected vs actual; JSON/Markdown export |
 
 ---
 
-## Remaining P0 Gaps (Deferred to P1)
+## Remaining P0 Gaps (Deferred to P1+)
 
 | Gap | Reason |
 |-----|--------|
-| EventBus integration | Requires typed event schema (Objective 3) |
+| EventBus integration with incident engine | Requires typed event schema (Objective 3) |
 | Per-device/service check scheduling | Requires inventory population (Objective 2/5) |
 | Availability/SLO calculations | Requires historical data accumulation (Objective 1 P1) |
-| Multi-protocol checks (DNS, HTTP, SNMP) | Phase P1+ |
+| Multi-protocol checks (DNS, HTTP, SNMP) | DNS/HTTP/TLS implemented but scheduler jobs hardcode targets |
 | Config hot-reload | Not required for P0; restart works |
 
 ---
@@ -475,27 +479,22 @@ cargo build --release
 
 | Limitation | Source |
 |------------|--------|
-| Config not wired to server | `src/main.rs:156-160` |
-| Scheduler never instantiated | `src/main.rs` no `Scheduler` usage |
-| EventBus never used | `grep -r "EventBus" src/` → only definition |
-| Storage not used by API | `src/api.rs` handlers return `[]` |
-| No `--config` CLI flag | `src/main.rs` `Cli` struct lacks config arg |
 | No authentication on API | `src/api.rs` no auth middleware |
 | No TLS/HTTPS | `src/main.rs` uses `TcpListener` plain |
-| No graceful shutdown | `src/main.rs` no signal handling |
+| No config hot-reload | `src/config.rs` no hot-reload mechanism |
 | Linux-only discovery | `src/discovery/interfaces.rs:36`, `routing.rs` |
 | ICMP requires `ping` binary | `src/monitoring/icmp.rs:12` |
-| Placeholder endpoints | `src/api.rs:18-24, 121-129` |
+| Placeholder endpoints | `src/api.rs:148-156` |
+| SNMP collector placeholder | `src/main.rs:567-586` |
+| No incident engine consuming events | `src/events.rs` emitters exist but no subscribers create incidents |
+| No SLA/SLO calculations | `src/storage.rs` no availability/percentile queries |
 
 ---
 
-## Next Priorities (P0)
+## Next Priorities (P4 - Intelligence & Capacity)
 
-1. **Wire Config** — Add `--config` flag, load YAML, apply to server (listen, log level, intervals)
-2. **Wire Storage** — Initialize `Storage` in `main`, pass to API handlers via Axum state
-3. **Start Scheduler** — Instantiate `Scheduler`, register monitoring jobs, run in background
-4. **Persist Checks** — Write `HealthCheckResult` to `observations` table on each check
-5. **Emit Events** — Use `EventBus` for `CheckCompleted`, `ThresholdBreached`, `DiscoveryChanged`
-6. **Add `--config` to CLI** — Parse and validate before server start
-
-These 6 steps unblock Objectives 1, 2, 3, 4, 5, 11, 13.
+1. **Objective 7: Anomaly Detection** — Build `BaselineEngine` from observations; implement spike/drift detectors; emit anomaly events
+2. **Objective 10: Root Cause Analysis** — Build dependency graph from topology; implement hypothesis engine with confidence scoring
+3. **Objective 14: Capacity Planning** — Query utilization trends from observations; implement linear regression; generate reports
+4. **CI/CD Pipeline** — GitHub Actions workflow with all required checks; release workflow with GHCR, SBOM, signing
+5. **Missing Documentation** — CONFIGURATION.md, API.md, OPERATIONS.md, CONTRIBUTING.md, SECURITY.md

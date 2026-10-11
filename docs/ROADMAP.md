@@ -7,9 +7,9 @@ This document maps the 16 strategic objectives to implementation phases, depende
 | Phase | Theme | Objectives | Status | Target |
 |-------|-------|------------|--------|--------|
 | P0 | Foundation | 8, 1 | ✅ Complete | Core wiring: config, storage, scheduler, basic monitoring persistence |
-| P1 | Operational Observability | 3, 4, 13 | ✅ Complete | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
-| P2 | Infrastructure Visibility | 2, 5 | ✅ Complete | Live topology, SNMP, inventory |
-| P3 | Operational Reliability | 11, 12, 15, 16 | ✅ Drift Detection Complete | Change audit (drift detection complete), maintenance windows, incident reports, disaster recovery |
+| P1 | Operational Observability | 3, 4, 13 | 🔄 In Progress | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
+| P2 | Infrastructure Visibility | 2, 5 | 🔄 In Progress | Live topology, SNMP, inventory |
+| P3 | Operational Reliability | 11, 12, 15, 16 | 🔄 In Progress | Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳ |
 | P4 | Intelligence & Capacity | 7, 10, 14 | Planned | Anomaly detection, root cause, capacity planning |
 | P5 | Scale & Advanced Analysis | 9, 6 | Planned | Distributed agents, traffic analysis |
 
@@ -17,9 +17,9 @@ This document maps the 16 strategic objectives to implementation phases, depende
 
 ### Phase Status Summary
 - **P0**: ✅ Complete — Core wiring complete (config, storage, scheduler, monitoring persistence)
-- **P1**: ✅ Complete — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
-- **P2**: ✅ Complete — SNMP (v2c/v3), topology builder, inventory persistence, metrics cardinality enforcement
-- **P3**: 🔄 **In Progress** — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
+- **P1**: 🔄 In Progress — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
+- **P2**: 🔄 In Progress — Topology builder with Mermaid/DOT/JSON exports complete; SNMP collector placeholder; inventory tables exist but empty
+- **P3**: 🔄 In Progress — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
 - **P4**: Planned — Anomaly detection, root cause analysis, capacity planning
 - **P5**: Planned — Distributed agents, traffic analysis
 
@@ -43,9 +43,10 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Retention policies for raw observations vs. aggregates
 
 ### Acceptance Criteria
-- [ ] Scheduler persists every check result to `observations` table
-- [ ] Availability % matches formula: `successful_checks / total_checks` per window
+- [x] Scheduler persists every check result to `observations` table
+- [x] Availability % matches formula: `successful_checks / total_checks` per window
 - [ ] p50/p95/p99 computed via `percentile_cont` or equivalent on raw latency_ms
+- [ ] Packet loss & jitter measurement
 - [ ] Error budget % = `1 - (actual_availability / target_availability)`
 - [ ] Burn rate alert fires when budget consumed faster than threshold
 - [ ] Planned maintenance windows exclude checks from SLO math (configurable)
@@ -76,11 +77,11 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - No inference of physical links without evidence
 
 ### Acceptance Criteria
-- [ ] Topology built from persisted discovery data + monitoring status
-- [ ] Every edge has `source_of_information`, `observed_at`, `confidence`
-- [ ] Mermaid export renders valid diagram in GitHub/GitLab
-- [ ] Diff between snapshots shows added/removed devices and edges
-- [ ] Visual state derived from: device check + gateway dependency (if gateway down → dependent devices "degraded" not "offline")
+- [x] Topology built from persisted discovery data + monitoring status
+- [x] Every edge has `source_of_information`, `observed_at`, `confidence`
+- [x] Mermaid export renders valid diagram in GitHub/GitLab
+- [x] Diff between snapshots shows added/removed devices and edges
+- [x] Visual state derived from: device check + gateway dependency (if gateway down → dependent devices "degraded" not "offline")
 - [ ] Integration test: known topology fixture → export matches expected Mermaid
 
 ### Risks
@@ -108,8 +109,8 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Event persistence: full transition history in `events` table
 
 ### Acceptance Criteria
-- [ ] Event struct serialized to JSON matches schema v1
-- [ ] Incident state machine enforces valid transitions (tested)
+- [x] Event struct serialized to JSON matches schema v1
+- [x] Incident state machine enforces valid transitions (tested)
 - [ ] Deduplication: same dedup_key within cooldown → no new incident
 - [ ] Correlation: simulated gateway failure + 5 downstream devices → 1 root incident, 5 suppressed
 - [ ] Telegram: message sent on open/ack/resolve; retry on 429/5xx; no blocking on failure
@@ -143,7 +144,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - **Backup/restore**: documented procedure for Prometheus, Grafana, SQLite, Kafka
 
 ### Acceptance Criteria
-- [ ] `docker compose --profile core up` → netwatch API reachable, SQLite persists
+- [x] `docker compose --profile core up` → netwatch API reachable, SQLite persists
 - [ ] `docker compose --profile observability up` → Prometheus scrapes netwatch, Grafana loads dashboards
 - [ ] `docker compose --profile full up` → all services healthy, Kafka optional for core
 - [ ] Stop/start containers → Prometheus/Grafana/SQLite data intact
@@ -266,7 +267,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - **Documentation**: ARCHITECTURE.md, DEVELOPMENT.md, CONFIGURATION.md, API.md, OPERATIONS.md, CONTRIBUTING.md
 
 ### Acceptance Criteria
-- [ ] GitHub Actions workflow blocks PR on any failed check
+- [x] GitHub Actions workflow blocks PR on any failed check
 - [ ] Release workflow publishes to GHCR with `vX.Y.Z`, `sha-<short>`, `latest` (semver only for releases)
 - [ ] SBOM attached to release
 - [ ] Load test: 1000 concurrent checks, <100ms p99 API latency, <500MB RSS
@@ -348,11 +349,11 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Export: diff report (JSON, Markdown)
 
 ### Acceptance Criteria
-- [ ] Discovery runs record every interface/route/device with timestamp
-- [ ] Diff between two discovery snapshots shows all changes
-- [ ] Drift detection: expected inventory (from config) vs. discovered → report
+- [x] Discovery runs record every interface/route/device with timestamp
+- [x] Diff between two discovery snapshots shows all changes
+- [x] Drift detection: expected inventory (from config) vs. discovered → report
 - [ ] Incident timeline includes "configuration change detected at T-5min"
-- [ ] Export produces valid JSON + human-readable Markdown
+- [x] Export produces valid JSON + human-readable Markdown
 
 ### Risks
 - Churn: frequent DHCP changes create noise; filter by confidence/persistence
@@ -399,9 +400,9 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Independent of host availability (service can fail while host up)
 
 ### Acceptance Criteria
-- [ ] HTTP check validates status 200 + body contains "OK"
-- [ ] DNS check resolves A record, verifies IP in expected range
-- [ ] TLS check warns 30/14/7 days before expiry
+- [x] HTTP check validates status 200 + body contains "OK"
+- [x] DNS check resolves A record, verifies IP in expected range
+- [x] TLS check warns 30/14/7 days before expiry
 - [ ] Metrics: `netwatch_synthetic_http_duration_seconds{phase="dns|tcp|tls|ttfb|total"}`
 - [ ] Service status decoupled from host: device down + service check not run → service unknown, not down
 
