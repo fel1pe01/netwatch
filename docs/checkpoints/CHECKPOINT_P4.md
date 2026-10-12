@@ -4,9 +4,11 @@
 **Project:** Netwatch  
 **Branch:** main  
 **Base Commit:** 183165d (ci: add GitHub workflows and API test script)  
-**Checkpoint Commit:** To be created after documentation  
+**Checkpoint Commit:** f17dfbfa6da4bcdd819bcbf62c82af016807a98b (chore(checkpoint): document Netwatch P4 audit state)  
 **Remote:** origin (https://github.com/fel1pe01/netwatch.git)  
 **Sync Status:** Up to date with origin/main (no divergence)
+
+**Corrective Review:** 2026-10-13 — This document was updated to fix inconsistencies identified in post-commit review. See corrective commit for corrections.
 
 ---
 
@@ -18,16 +20,16 @@
 | Checkpoint Date/Time | 2026-10-12 23:20:00 UTC |
 | Branch | main |
 | Base Commit | 183165d (ci: add GitHub workflows and API test script) |
-| Checkpoint Commit | TBD (will be created after this document) |
+| Checkpoint Commit | f17dfbfa6da4bcdd819bcbf62c82af016807a98b |
 | Remote Sync Status | Synchronized with origin/main |
 
 ---
 
 ## B. Summary of Changes
 
-### Changes in Working Tree (Uncommitted)
+### Changes Committed in Checkpoint f17dfbf
 
-The following files have been modified in the current working tree but not yet committed. These changes were made in prior sessions and are present in the working tree:
+The following changes were committed in checkpoint f17dfbfa6da4bcdd819bcbf62c82af016807a98b. These changes were made in prior sessions and were present in the working tree at checkpoint time:
 
 #### Core Implementation Changes
 
@@ -42,17 +44,17 @@ The following files have been modified in the current working tree but not yet c
 | `src/topology_builder.rs` | **Minor modification** | Simplified subnet string construction for IPv4 and IPv6. |
 | `src/config.rs` | **Minor modification** | Added `anomaly_cooldown_seconds` and `min_absolute_change` to `AnomalyConfig` with defaults. |
 | `src/api.rs` | **Minor modification** | Removed unused `Serialize` import. |
-| `src/main.rs` | **Major modification** | Removed `discover local` CLI subcommand and its implementation, simplified capacity CLI handler, fixed `event_bus.clone()` for scheduler registration, fixed shutdown signal handling block syntax. |
+| `src/main.rs` | **Modification** | Simplified capacity CLI handler, fixed `event_bus.clone()` for scheduler registration, fixed shutdown signal handling block syntax. **Note: `discover local` CLI subcommand was NOT removed; it remains implemented.** |
 
 #### Configuration & Tests
 
 | File | Type | Description |
 |------|------|-------------|
 | `config.example.yaml` | **Modification** | Added `anomaly_cooldown_seconds: 300` and `min_absolute_change: 10.0` to anomaly section. |
-| `tests/anomaly_tests.rs` | **New file** | Unit tests for anomaly detector (untracked, new). |
-| `tests/capacity_tests.rs` | **New file** | Unit tests for capacity planner (untracked, new). |
-| `tests/incident_tests.rs` | **New file** | Unit tests for incident engine (untracked, new). |
-| `tests/root_cause_tests.rs` | **New file** | Unit tests for root cause analyzer (untracked, new). |
+| `tests/anomaly_tests.rs` | **New file (committed)** | Unit tests for anomaly detector. |
+| `tests/capacity_tests.rs` | **New file (committed)** | Unit tests for capacity planner. |
+| `tests/incident_tests.rs` | **New file (committed)** | Unit tests for incident engine. |
+| `tests/root_cause_tests.rs` | **New file (committed)** | Unit tests for root cause analyzer. |
 
 #### Untracked Development Scripts (Not for Commit)
 
@@ -92,12 +94,14 @@ The following test results were reported from earlier successful runs but **have
 | Check | Command | Reason |
 |-------|---------|--------|
 | Unit/Integration tests | `cargo test` | Toolchain missing `dlltool.exe` |
-| Format check | `cargo fmt --check` | Requires compilation |
-| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | Requires compilation |
-| Release build | `cargo build --release` | Toolchain issue |
+| Format check | `cargo fmt --check` | Not executed (no toolchain issue; `cargo fmt` works without compilation) |
+| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | Toolchain missing `dlltool.exe` |
+| Release build | `cargo build --release` | Toolchain missing `dlltool.exe` |
 | E2E smoke test | `./scripts/e2e_smoke.sh` | Requires release binary |
 
 **Action Required:** Install MinGW (providing `dlltool.exe`) or install MSVC target via `rustup target add x86_64-pc-windows-msvc` to restore test execution capability.
+
+**Corrective Review (2026-10-13):** `cargo fmt --check` executed successfully (no formatting issues). Clippy, tests, and build could not run due to missing `dlltool.exe` in GNU toolchain.
 
 ---
 
@@ -275,7 +279,7 @@ git diff --name-only <checkpoint-commit-hash>..HEAD
 - `src/storage.rs`
 - `src/topology_builder.rs`
 
-### New Test Files (Untracked — Need Review Before Commit)
+### New Test Files (Committed in f17dfbf)
 - `tests/anomaly_tests.rs`
 - `tests/capacity_tests.rs`
 - `tests/incident_tests.rs`
@@ -287,6 +291,38 @@ git diff --name-only <checkpoint-commit-hash>..HEAD
 - `fix_vals.py`, `fix_vals2.py`, `fix_vals3.py`, `fix_vals4.py`, `fix_vals5.py`, `fix_vals6.py`
 - `fix_anomaly.py`, `fix_anomaly2.py`, `fix_anomaly3.py`, `fix_anomaly4.py`, `fix_anomaly5.py`, `fix_anomaly6.py`
 - `fix_capacity.py`, `fix_root_cause.py`, `fix_storage.py`
+
+---
+
+## Corrective Review (2026-10-13)
+
+This section documents corrections made after the initial checkpoint commit (f17dfbf).
+
+### Corrections Applied
+1. **Checkpoint Commit SHA**: Updated from "TBD" to actual commit `f17dfbfa6da4bcdd819bcbf62c82af016807a98b`
+2. **Changes Status**: Corrected "Uncommitted" to "Committed in f17dfbf"
+3. **Test Files**: Corrected from "untracked" to "committed"
+4. **`discover local` CLI**: Corrected false claim of removal — the command remains implemented in `src/main.rs`
+5. **Format Check**: `cargo fmt --check` executed successfully in corrective review (no formatting issues)
+6. **Test Execution**: Confirmed `cargo clippy`, `cargo test`, `cargo build --release` fail due to missing `dlltool.exe` in GNU toolchain (not a code issue)
+
+### Validation Results (Corrective Review Session)
+| Check | Command | Result |
+|-------|---------|--------|
+| Format check | `cargo fmt --check` | ✅ **PASSED** (executed 2026-10-13) |
+| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | ❌ **BLOCKED** — missing `dlltool.exe` |
+| Unit/Integration tests | `cargo test` | ❌ **BLOCKED** — missing `dlltool.exe` |
+| Release build | `cargo build --release` | ❌ **BLOCKED** — missing `dlltool.exe` |
+
+### Remaining Limitations (Unchanged)
+- Root Cause Analysis: 4/8 tests failing (historical, not re-verified)
+- TCP test flakiness: Unverified
+- SNMP data: Unavailable (Obj 5 not implemented)
+- Confidence intervals: Not implemented
+- Pattern break thresholds: Hardcoded, no config
+- False positive tracking: Not implemented
+- DependsOn edges: Incomplete service→gateway chain
+- API security: No auth, no TLS, no SSRF protection
 
 ---
 

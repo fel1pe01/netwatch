@@ -431,8 +431,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **Anomaly Detection** | **Partial** | `AnomalyDetector` with spike/drift detection; baselines from observations; EventBus integration; scheduler job; incident correlation |
 | **Capacity Planning** | **Partial** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
-| **Tests (Unit/Integration)** | ✅ 46 passing | See `cargo test` output |
-| **E2E Smoke Test** | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |
+| **Tests (Unit/Integration)** | ⚠️ 46 passing (historical) | See `cargo test` output — **not re-verified this session** |
+| **E2E Smoke Test** | ⚠️ 42/42 passing (historical) | `scripts/e2e_smoke.sh` — **not re-verified this session** |
 
 ---
 
@@ -485,7 +485,7 @@ cargo build --release
 ./scripts/e2e_smoke.sh
 ```
 
-**Last Verified:** All commands pass as of audit date.
+**Last Verified:** Historical (prior session); commands not re-executed in corrective review due to toolchain issue (missing `dlltool.exe`). `cargo fmt --check` passed in corrective review (2026-10-13).
 
 ---
 

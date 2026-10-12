@@ -183,22 +183,6 @@
 6. **Obj 5**: SNMP IF-MIB polling
 7. **Obj 11**: Drift→incident correlation
 
-### Critical Path for P4 Implementation
-
-1. **Objective 10** (Root Cause Analysis): Add `DependsOn` edges to topology; build `RootCauseAnalyzer` with hypothesis generation; add hypothesis confirmation API
-2. **Objective 7 enhancement**: Add unit tests for `AnomalyDetector`; implement detector registry; add pattern break detection; add drift→anomaly correlation
-3. **Objective 14 enhancement**: Add unit tests for `CapacityPlanner`; integrate SNMP utilization data when Obj 5 complete
-4. **Objective 5** (SNMP): Implement IF-MIB polling for interface utilization; this unblocks Obj 14 utilization trends
-5. **Objective 11 enhancement**: Add drift→incident correlation; this enriches Obj 7 and Obj 10 timelines
-
-### Recommended P4 Implementation Order
-
-1. **Obj 10.1-10.2**: Dependency graph enhancement + RootCauseAnalyzer + Hypothesis model
-2. **Obj 7.3**: Unit tests for anomaly detector (spike, drift, baseline)
-3. **Obj 7.6, 7.11**: Pattern break detection + detector registry
-4. **Obj 14.3-14.4**: Capacity CLI/API + unit tests
-5. **Obj 10.3**: Hypothesis confirmation API
-
 ---
 
 ## Next Steps
