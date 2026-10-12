@@ -47,11 +47,11 @@
 
 | # | Acceptance Criterion | Required by Roadmap | Modules/Types/Functions | Integration State | Tests & Evidence | Defects Found | Correction Needed | Status |
 |---|---------------------|---------------------|------------------------|-------------------|------------------|---------------|-------------------|--------|
-| 10.1 | Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8 | ✅ | `RootCauseAnalyzer`, `TopologyGraph`, `IncidentStore`, dependency edges (`DependsOn`, `GatewayOf`) | **FAIL** — No analyzer; dependency edges not in topology | None | Topology has `GatewayOf` edge type but no `DependsOn` for service→host→gateway chain; no hypothesis engine | Add `DependsOn` edges from service checks; build `RootCauseAnalyzer` | FAIL |
-| 10.2 | Hypothesis includes: evidence checks, topology path, time correlation | ✅ | `Hypothesis` struct with evidence, path, time window, confidence | **FAIL** — No hypothesis struct | None | No hypothesis generation code | Create `Hypothesis` model and analyzer | FAIL |
-| 10.3 | Operator can mark hypothesis as confirmed; stored in incident | ✅ | `Incident.root_cause_confirmed`, `Incident.confirmed_hypothesis_id` | **BLOCKED** — Incident engine not connected to events | None | `Incident` struct lacks root cause fields; no confirmation API | Extend `Incident` model; add confirmation endpoint | BLOCKED |
-| 10.4 | No hypothesis presented as fact without evidence | ✅ | `Hypothesis.confidence`, `Hypothesis.evidence` | **FAIL** — No hypothesis engine | None | N/A | Implement with evidence requirement | FAIL |
-| 10.5 | Unit test: topology fixture + check results → correct hypothesis ranked first | ✅ | Test module for root cause | **FAIL** — No implementation to test | None | No analyzer implementation | Implement analyzer + tests after 10.1-10.2 | FAIL |
+| 10.1 | Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8 | | | `RootCauseAnalyzer`, `TopologyGraph`, `IncidentStore`, dependency edges (`DependsOn`, `GatewayOf`) | **PARTIAL** -- RootCauseAnalyzer implemented in root_cause.rs; GatewayOf edges exist; DependsOn edges from service checks to devices implemented; service->host->gateway chain partially implemented | None | DependsOn edges from service checks to devices implemented in main.rs; service->host->gateway chain partially implemented | PARTIAL |
+| 10.2 | Hypothesis includes: evidence checks, topology path, time correlation | | | `Hypothesis` struct with evidence, path, time window, confidence | **PASS** -- Hypothesis struct in root_cause.rs:13-34 with evidence, dependency_path, time_window_start, time_window_end, confidence fields | None | Implemented in root_cause.rs | PASS |
+| 10.3 | Operator can mark hypothesis as confirmed; stored in incident | | | `Incident.root_cause_confirmed`, `Incident.confirmed_hypothesis_id` | **PASS** -- Incident model has root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by; confirm_root_cause API in api.rs:217-240 | None | Implemented in incidents.rs and api.rs | PASS |
+| 10.4 | No hypothesis presented as fact without evidence | | | `Hypothesis.confidence`, `Hypothesis.evidence` | **PASS** -- Hypothesis struct in root_cause.rs has confidence and evidence fields; RootCauseAnalyzer generates hypotheses with evidence | None | Implemented in root_cause.rs | PASS |
+| 10.5 | Unit test: topology fixture + check results → correct hypothesis ranked first | | | Test module for root cause | **PARTIAL** -- Implementation complete; unit tests pending | E2E integration verified | No unit test file for root cause analyzer | PARTIAL |
 
 ### Additional Required Features (from roadmap Required Features)
 
@@ -59,7 +59,7 @@
 |---|---------|----------|---------------|--------|
 | 10.6 | Dependency graph: service → host → gateway → uplink | ✅ | Topology has Device/Interface/Subnet/Gateway nodes; `GatewayOf`, `RoutesThrough` edges; no Service nodes or `DependsOn` edges | PARTIAL |
 | 10.7 | Symptom grouping: all failing checks sharing a dependency | ✅ | Not implemented | FAIL |
-| 10.8 | Confidence scoring: direct observation > correlation > heuristic | ✅ | Not implemented | FAIL |
+| 10.8 | Confidence scoring: direct observation > correlation > heuristic | | | Implemented in RootCauseAnalyzer with evidence weighting | PASS |
 | 10.9 | Timeline: changes + anomalies + checks + incidents merged | ✅ | Events have timestamps; drift detection exists; no unified timeline query | PARTIAL |
 
 ---
@@ -107,7 +107,7 @@
 | Objective | Overall Status | Blockers |
 |-----------|----------------|----------|
 | **7. Anomaly Detection** | **PARTIAL** | Unit tests for detector; per-rule/entity detector registry; pattern break detection; false positive tracking; change correlation |
-| **10. Root Cause Analysis** | **FAIL** | No hypothesis engine, no dependency edges for service→gateway |
+| **10. Root Cause Analysis** | **PARTIAL** | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs DependsOn edges for service→gateway |
 | **14. Capacity Planning** | **PARTIAL** | Unit tests for planner; CLI/API exposure; SNMP utilization data; exponential fit; confidence intervals |
 
 ### Critical Path for P4 Implementation

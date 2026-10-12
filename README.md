@@ -18,14 +18,14 @@ Netwatch is organized around 16 strategic objectives that define its product sco
 | 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; stack deployment untested) |
 | 5 | **Inventory & SNMP Monitoring** | High | **Planned** (tables exist; no SNMP code) |
 | 6 | **Traffic Analysis & Consumption** | Medium-High | **Planned** |
-| 7 | **Intelligent Anomaly Detection** | Medium-High | **Planned** (P4) |
+| 7 | **Intelligent Anomaly Detection** | Medium-High | **Partial** (P4 - spike/drift detection, baselines, EventBus, scheduler, incident correlation implemented; unit tests, pattern break, detector registry pending) |
 | 8 | **Professional Software Engineering** | Critical (transversal) | **Partial** (CI passes; CD, SBOM, signing missing) |
 | 9 | **Distributed & Multi-site Monitoring** | High (long-term) | **Planned** |
-| 10 | **Root Cause Analysis** | High | **Planned** (P4) |
+| 10 | **Root Cause Analysis** | High | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; needs DependsOn edges in topology) |
 | 11 | **Change Audit & Drift Detection** | Medium-High | **Partial** (drift detection complete; expected inventory config, drift→incident correlation pending) |
 | 12 | **Maintenance & Change Management** | Medium-High | **Partial** (silence fields exist; no silence engine, calendars) |
 | 13 | **Synthetic Service Monitoring** | High | **Partial** (HTTP, DNS, TLS collectors implemented; scheduler integration pending) |
-| 14 | **Capacity Planning** | Medium | **Planned** (P4) |
+| 14 | **Capacity Planning** | Medium | **Partial** (P4 - linear regression, time-to-saturation, markdown/JSON reports, scheduler job implemented; CLI/API, unit tests, SNMP data, exponential fit, confidence intervals pending) |
 | 15 | **Reproducible Incident Reports** | Medium | **Planned** |
 | 16 | **Verified Disaster Recovery** | High | **Planned** |
 
@@ -66,7 +66,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Test suite | ✅ 46 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift |
 | E2E smoke test | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |
 
-**Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, anomaly detection/root cause/capacity planning not started (P4).
+**Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, no pattern break detection, no detector registry, no CLI/API for capacity planning.
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for detailed per-objective status with code references.
 

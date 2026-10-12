@@ -23,7 +23,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | 7 | Intelligent Anomaly Detection | **Planned** (P4) | No baselines, no detectors |
 | 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing, load/resilience tests missing |
 | 9 | Distributed & Multi-site Monitoring | **Planned** | No agent protocol, no central collector |
-| 10 | Root Cause Analysis | **Planned** (P4) | No dependency graph, no hypothesis engine |
+| 10 | Root Cause Analysis | **Partial** (P4) | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs DependsOn edges |
 | 11 | Change Audit & Drift Detection | **Partial** (drift detection complete) | Expected inventory config, drift→incident correlation |
 | 12 | Maintenance & Change Management | **Partial** (silence fields exist) | No silence engine, no calendars, no auto-expiry |
 | 13 | Synthetic Service Monitoring | **Partial** (HTTP, DNS, TLS collectors implemented) | Scheduler integration, per-phase latency metrics, service model |
@@ -265,16 +265,16 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 10: Root Cause Analysis
 
-**Global Status:** Planned (P4)
+**Global Status:** **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; needs DependsOn edges in topology)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Dependency graph (service→host→gateway→uplink) | ❌ | No dependency edges in topology |
+| Dependency graph (service→host→gateway→uplink) | ⚠️ | GatewayOf edges exist; DependsOn edges from service checks to devices implemented in main.rs; service→host→gateway chain partially implemented |
 | Symptom grouping (shared dependency) | ❌ | No grouping logic |
-| Hypothesis generation with evidence | ❌ | No hypothesis engine |
-| Confidence scoring | ❌ | No scoring |
-| Human-confirmed root cause stored | ❌ | No incident model |
-| Merged timeline (changes + anomalies + checks + incidents) | ❌ | No unified timeline |
+| Hypothesis generation with evidence | ✅ | RootCauseAnalyzer in root_cause.rs generates hypotheses with evidence scoring and confidence scoring (direct observation > correlation > heuristic) |
+| Confidence scoring | ✅ | Implemented in RootCauseAnalyzer with evidence weighting |
+| Human-confirmed root cause stored | ✅ | Incident model has root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by; confirm_root_cause API in api.rs |
+| Merged timeline (changes + anomalies + checks + incidents) | ❌ | No unified timeline query; events have timestamps but no unified view |
 
 **Tests:** None.
 
