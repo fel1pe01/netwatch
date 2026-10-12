@@ -2,6 +2,8 @@
 pub mod anomaly;
 #[path = "api.rs"]
 pub mod api;
+#[path = "capacity_planning.rs"]
+pub mod capacity_planning;
 #[path = "config.rs"]
 pub mod config;
 #[path = "config_file_test.rs"]

@@ -34,6 +34,19 @@ snmp:
 scheduler:
   concurrency: 5
   rate_limit: 500
+capacity:
+  enabled: true
+  interval: 3600
+anomaly:
+  enabled: true
+  interval: 300
+  min_samples: 10
+  lookback_window_seconds: 3600
+  sensitivity: 1.0
+  min_z_score: 3.0
+  enable_spike_detection: true
+  enable_drift_detection: true
+  enable_pattern_break_detection: false
 "#;
 
     fs::write(&config_path, yaml_content).unwrap();

@@ -54,6 +54,7 @@ pub enum EventType {
     ConfigChanged,
     MaintenanceWindowStart,
     MaintenanceWindowEnd,
+    AnomalyDetected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -93,6 +94,7 @@ pub struct EventEvidence {
     pub threshold: Option<ThresholdEvidence>,
     pub topology_diff: Option<TopologyDiffEvidence>,
     pub collector_error: Option<CollectorErrorEvidence>,
+    pub anomaly: Option<AnomalyEvidence>,
     pub raw: Option<serde_json::Value>,
 }
 
@@ -126,6 +128,26 @@ pub struct CollectorErrorEvidence {
     pub collector_name: String,
     pub error: String,
     pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnomalyEvidence {
+    pub entity_id: String,
+    pub entity_type: String,
+    pub metric: String,
+    pub protocol: String,
+    pub anomaly_type: String,
+    pub severity: String,
+    pub current_value: f64,
+    pub baseline_mean: f64,
+    pub baseline_stddev: f64,
+    pub z_score: f64,
+    pub sample_count: usize,
+    pub window_start: String,
+    pub window_end: String,
+    pub rule_id: String,
+    pub confidence: f64,
+    pub description: String,
 }
 
 impl Event {
@@ -196,6 +218,7 @@ impl EventType {
             EventType::ConfigChanged => "config_changed",
             EventType::MaintenanceWindowStart => "maintenance_window_start",
             EventType::MaintenanceWindowEnd => "maintenance_window_end",
+            EventType::AnomalyDetected => "anomaly_detected",
         }
     }
 }
@@ -248,6 +271,7 @@ impl EventBus {
                 threshold: None,
                 topology_diff: None,
                 collector_error: None,
+                anomaly: None,
                 raw: None,
             },
         );
@@ -271,6 +295,7 @@ impl EventBus {
                 threshold: Some(threshold_evidence),
                 topology_diff: None,
                 collector_error: None,
+                anomaly: None,
                 raw: None,
             },
         );
@@ -298,6 +323,36 @@ impl EventBus {
                     error,
                     target,
                 }),
+                anomaly: None,
+                raw: None,
+            },
+        );
+        self.emit(event).await
+    }
+
+    pub async fn emit_anomaly_detected(
+        &self,
+        entity_id: String,
+        entity_type: EntityType,
+        anomaly_evidence: AnomalyEvidence,
+    ) -> Result<(), EventError> {
+        let severity = match anomaly_evidence.severity.as_str() {
+            "critical" => Severity::Critical,
+            "warning" => Severity::Warning,
+            _ => Severity::Info,
+        };
+        let event = Event::new(
+            EventType::AnomalyDetected,
+            entity_id.clone(),
+            entity_type,
+            severity,
+            "anomaly_detector".to_string(),
+            EventEvidence {
+                check_result: None,
+                threshold: None,
+                topology_diff: None,
+                collector_error: None,
+                anomaly: Some(anomaly_evidence),
                 raw: None,
             },
         );

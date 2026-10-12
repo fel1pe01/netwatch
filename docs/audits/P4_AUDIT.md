@@ -1,6 +1,6 @@
 # P4 Audit Matrix — Intelligence & Capacity
 
-**Generated:** 2026-10-11
+**Generated:** 2026-10-12
 **Scope:** Objectives 7 (Anomaly Detection), 10 (Root Cause Analysis), 14 (Capacity Planning)
 **Dependencies to verify:** Objectives 1, 2, 3, 5, 11, 13
 
@@ -47,7 +47,7 @@
 
 | # | Acceptance Criterion | Required by Roadmap | Modules/Types/Functions | Integration State | Tests & Evidence | Defects Found | Correction Needed | Status |
 |---|---------------------|---------------------|------------------------|-------------------|------------------|---------------|-------------------|--------|
-| 10.1 | Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8 | | | `RootCauseAnalyzer`, `TopologyGraph`, `IncidentStore`, dependency edges (`DependsOn`, `GatewayOf`) | **PARTIAL** -- RootCauseAnalyzer implemented in root_cause.rs; GatewayOf edges exist; DependsOn edges from service checks to devices implemented; service->host->gateway chain partially implemented | None | DependsOn edges from service checks to devices implemented in main.rs; service->host->gateway chain partially implemented | PARTIAL |
+| 10.1 | Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8 | | | `RootCauseAnalyzer`, `TopologyGraph`, `IncidentStore`, dependency edges (`DependsOn`, `GatewayOf`) | **PARTIAL** -- RootCauseAnalyzer implemented in root_cause.rs; GatewayOf edges exist; DependsOn edges from service checks to devices implemented; service->host->gateway chain partially implemented | Fixed: failure detection now uses confidence='low' | DependsOn edges from service checks to devices implemented in main.rs; service->host->gateway chain partially implemented | PARTIAL |
 | 10.2 | Hypothesis includes: evidence checks, topology path, time correlation | | | `Hypothesis` struct with evidence, path, time window, confidence | **PASS** -- Hypothesis struct in root_cause.rs:13-34 with evidence, dependency_path, time_window_start, time_window_end, confidence fields | None | Implemented in root_cause.rs | PASS |
 | 10.3 | Operator can mark hypothesis as confirmed; stored in incident | | | `Incident.root_cause_confirmed`, `Incident.confirmed_hypothesis_id` | **PASS** -- Incident model has root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by; confirm_root_cause API in api.rs:217-240 | None | Implemented in incidents.rs and api.rs | PASS |
 | 10.4 | No hypothesis presented as fact without evidence | | | `Hypothesis.confidence`, `Hypothesis.evidence` | **PASS** -- Hypothesis struct in root_cause.rs has confidence and evidence fields; RootCauseAnalyzer generates hypotheses with evidence | None | Implemented in root_cause.rs | PASS |
@@ -70,17 +70,17 @@
 
 | # | Acceptance Criterion | Required by Roadmap | Modules/Types/Functions | Integration State | Tests & Evidence | Defects Found | Correction Needed | Status |
 |---|---------------------|---------------------|------------------------|-------------------|------------------|---------------|-------------------|--------|
-| 14.1 | Trend computed from last 30d of utilization samples | ✅ | `CapacityPlanner::analyze_capacity`, `perform_linear_regression`, `Storage::get_latency_observations` | **PASS** — Implemented in `capacity_planning.rs:136-226` using latency data | Manual verification; unit tests pending | Uses latency data instead of interface utilization (SNMP not yet implemented) | Add SNMP utilization data when Obj 5 complete | PASS |
+| 14.1 | Trend computed from last 30d of utilization samples | ✅ | `CapacityPlanner::analyze_capacity`, `perform_linear_regression`, `Storage::get_latency_observations` | **PASS** — Implemented in `capacity_planning.rs:136-226` using latency data | Manual verification; unit tests pending | Fixed: linear regression now uses actual timestamps; saturation threshold uses config percentage | Add SNMP utilization data when Obj 5 complete | PASS |
 | 14.2 | Projection includes: model type, R², assumption (linear growth) | ✅ | `TrendAnalysis` struct with `slope`, `r_squared`, `confidence_level` | **PASS** — `capacity_planning.rs:60-92` includes all fields | Manual verification | R² computed but confidence interval not implemented | Add confidence interval calculation | PASS |
-| 14.3 | Report generated via CLI/API, includes uncertainty disclaimer | ✅ | `CapacityReport::to_markdown`, `to_json` | **PASS** — `capacity_planning.rs:350-453` generates reports with disclaimer | Manual verification | No CLI/API command exposed yet | Add CLI subcommand and API endpoint | PARTIAL |
+| 14.3 | Report generated via CLI/API, includes uncertainty disclaimer | ✅ | `CapacityReport::to_markdown`, `to_json` | **PASS** — `capacity_planning.rs:350-453` generates reports with disclaimer | Manual verification | CLI/API command exposed via `netwatch capacity report` and `/api/v1/capacity/report` | Verified working | PASS |
 | 14.4 | Unit test: synthetic linear growth → predicted date within 10% | ✅ | Test module for capacity planning | **PARTIAL** — Implementation complete; unit tests pending | Manual verification | No unit test file | Create `tests/capacity_tests.rs` | PARTIAL |
 
 ### Additional Required Features (from roadmap Required Features)
 
 | # | Feature | Required | Current State | Status |
 |---|---------|----------|---------------|--------|
-| 14.5 | Traffic/utilization trends (linear, exponential fit) | ✅ | Linear regression implemented; exponential fit not implemented | PARTIAL |
-| 14.6 | Saturation thresholds: interface >80%, CPU >80%, memory >85% | ✅ | `CapacityConfig.saturation_threshold_pct` (default 80%); only latency trends implemented | PARTIAL |
+| 14.5 | Traffic/utilization trends (linear, exponential fit) | ✅ | Linear regression implemented with proper timestamps; exponential fit not implemented | PARTIAL |
+| 14.6 | Saturation thresholds: interface >80%, CPU >80%, memory >85% | ✅ | `CapacityConfig.saturation_threshold_pct` (default 80%); now properly applied to max observed value | PASS |
 | 14.7 | Time-to-limit estimation with confidence interval | ✅ | `TrendAnalysis.time_to_saturation` computed; confidence interval not implemented | PARTIAL |
 | 14.8 | Bottleneck identification: top constrained resources | ✅ | `CapacityReport.critical_resources` sorted by time to saturation | PASS |
 | 14.9 | Report: available headroom, projected exhaustion date | ✅ | `CapacityReport::to_markdown` includes all required fields | PASS |
@@ -94,7 +94,7 @@
 | Historical observations | 1 | Obj 7 (baselines), Obj 14 (trends) | **PARTIAL** — `observations` table populated by scheduler with latency metrics (icmp, http, dns, tls); only 4 protocols; no interface utilization, CPU, memory | Need SNMP data (Obj 5) for utilization; need more protocols |
 | Availability/percentile queries | 1 | Obj 7 (baselines), Obj 14 (trends) | **FAIL** — No SQL views/queries for p50/p95/p99, availability % | Need to implement |
 | Topology with dependencies | 2 | Obj 10 (dependency graph) | **PARTIAL** — Graph built with Device/Interface/Subnet/Gateway nodes; `GatewayOf`, `RoutesThrough`, `Contains`, `ConnectedTo` edges; **no Service nodes**, **no `DependsOn` edges** | Add Service model; add `DependsOn` edges from checks to devices/gateways |
-| Incident engine consuming events | 3 | Obj 7 (correlation), Obj 10 (hypothesis storage) | **FAIL** — `IncidentStore` exists but no EventBus subscriber creates incidents | Wire EventBus→IncidentEngine |
+| Incident engine consuming events | 3 | Obj 7 (correlation), Obj 10 (hypothesis storage) | **PASS** — `IncidentEngine` wired to `EventBus` in `main.rs`; consumes `AnomalyDetected`, `CheckFailed`, `ThresholdBreached` events | None |
 | Alert rules / correlation / notifiers | 3 | Obj 7 (anomaly→alert), Obj 10 (incident context) | **FAIL** — No alert rule engine, no correlation, no notifiers | Implement |
 | SNMP utilization data | 5 | Obj 14 (interface utilization trends) | **FAIL** — SNMP collector placeholder only; no IF-MIB polling | Implement SNMP collector |
 | Drift detection + topology change events | 11 | Obj 7 (anomaly+change correlation), Obj 10 (change history in timeline) | **PARTIAL** — Drift detection works, exports JSON/MD; `TopologyChanged` events emitted; **no drift→incident correlation** | Add drift→incident correlation |
@@ -108,13 +108,13 @@
 |-----------|----------------|----------|
 | **7. Anomaly Detection** | **PARTIAL** | Unit tests for detector; per-rule/entity detector registry; pattern break detection; false positive tracking; change correlation |
 | **10. Root Cause Analysis** | **PARTIAL** | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs DependsOn edges for service→gateway |
-| **14. Capacity Planning** | **PARTIAL** | Unit tests for planner; CLI/API exposure; SNMP utilization data; exponential fit; confidence intervals |
+| **14. Capacity Planning** | **PARTIAL** | Unit tests for planner; SNMP utilization data; exponential fit; confidence intervals |
 
 ### Critical Path for P4 Implementation
 
 1. **Objective 10** (Root Cause Analysis): Add `DependsOn` edges to topology; build `RootCauseAnalyzer` with hypothesis generation; add hypothesis confirmation API
 2. **Objective 7 enhancement**: Add unit tests for `AnomalyDetector`; implement detector registry; add pattern break detection; add drift→anomaly correlation
-3. **Objective 14 enhancement**: Add unit tests for `CapacityPlanner`; expose CLI/API; integrate SNMP utilization data when Obj 5 complete
+3. **Objective 14 enhancement**: Add unit tests for `CapacityPlanner`; integrate SNMP utilization data when Obj 5 complete
 4. **Objective 5** (SNMP): Implement IF-MIB polling for interface utilization; this unblocks Obj 14 utilization trends
 5. **Objective 11 enhancement**: Add drift→incident correlation; this enriches Obj 7 and Obj 10 timelines
 
@@ -135,3 +135,31 @@
 3. **Objective 14**: Add unit tests for `CapacityPlanner`; expose CLI subcommand and API endpoint
 4. **Objective 5**: Implement SNMP IF-MIB polling for interface utilization
 5. **Objective 11**: Add drift→incident correlation
+
+---
+
+## Fixes Applied (2026-10-12)
+
+### AnomalyDetector (`src/anomaly.rs`)
+- Fixed `get_monitored_entities()` query: Changed `WHERE value > 0` to `WHERE observed_at >= datetime('now', '-1 hour')` to include all recent entities
+- Fixed `analyze_and_emit()`: Now checks ALL recent observations (last 5 min) instead of only the most recent value
+- Fixed indentation and loop structure for proper anomaly emission
+
+### CapacityPlanner (`src/capacity_planning.rs`)
+- Fixed `get_resource_ids()`: Now returns `entity_id:metric:protocol` format (3 parts) instead of `device_id:metric` (2 parts)
+- Fixed `perform_linear_regression()`: Now uses actual timestamps (seconds since window_start) as x-values instead of sequential indices (0, 1, 2...)
+- Added `get_latency_observations_with_timestamps()` to `Storage` for proper time series regression
+- Fixed saturation threshold calculation: Now uses `max_observed * (saturation_threshold_pct / 100.0)` from config instead of hardcoded 1000ms
+- Fixed `TrendAnalysis` construction: Uses actual `entity_id`, `window_start`, `window_end`, and config `confidence_level`
+
+### RootCauseAnalyzer (`src/root_cause.rs`)
+- Fixed `get_failing_observations()`: Changed query from `value = 0` to `confidence = 'low'` to accurately detect failed checks
+
+### Main Application (`src/main.rs`)
+- Added `IncidentEngine` initialization and wiring to `EventBus` via `subscribe()`
+- Added `IncidentEngine` background task alongside scheduler
+- Properly aborts both scheduler and incident engine on shutdown
+
+### Configuration (`config.example.yaml`)
+- Added `capacity` section with `enabled` and `interval` options
+- Added `anomaly` section with all detector configuration options

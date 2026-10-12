@@ -1,16 +1,18 @@
 use crate::discovery::interfaces::discover_interfaces;
 use crate::discovery::routing::discover_routes;
+use crate::incidents::{confirm_root_cause, IncidentStore};
 use crate::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
 use crate::monitoring::{check_tcp, ping, HealthCheckResult};
+use crate::root_cause::RootCauseAnalyzer;
 use crate::storage::Storage;
 use axum::{
-    extract::State,
+    extract::{Path, State},
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
@@ -141,6 +143,76 @@ pub async fn tcp_handler(Json(req): Json<TcpRequest>) -> Json<HealthCheckResult>
     Json(res)
 }
 
+#[derive(Deserialize)]
+pub struct ConfirmHypothesisRequest {
+    hypothesis_id: String,
+    confirmed: bool,
+    actor: String,
+}
+
+pub async fn hypotheses_handler(State(storage): State<Arc<Storage>>) -> Json<Value> {
+    let incident_store = IncidentStore::new(storage.pool.clone());
+    let _incidents = incident_store.list_open().await.unwrap_or_default();
+    let topology_store = crate::topology_store::TopologyStore::new(storage.pool.clone());
+    let analyzer = RootCauseAnalyzer::new(Arc::new(topology_store), storage.clone());
+    let hypotheses = analyzer
+        .analyze(chrono::Utc::now() - chrono::Duration::hours(24), None)
+        .await
+        .unwrap_or_default();
+    Json(json!({"hypotheses": hypotheses}))
+}
+
+pub async fn hypothesis_detail_handler(
+    State(storage): State<Arc<Storage>>,
+    Path(hypothesis_id): Path<String>,
+) -> Json<Value> {
+    use crate::incidents::IncidentStore;
+    let incident_store = IncidentStore::new(storage.pool.clone());
+    match incident_store.find_by_hypothesis_id(&hypothesis_id).await {
+        Ok(Some(incident)) => {
+            let hypothesis = crate::root_cause::Hypothesis {
+                id: incident.root_cause_hypothesis_id.unwrap_or_default(),
+                entity_id: incident.entity_id,
+                entity_type: incident.entity_type,
+                entity_label: incident.title,
+                confidence: 0.7,
+                evidence: vec![],
+                dependency_path: vec![],
+                time_window_start: incident.created_at,
+                time_window_end: incident.updated_at,
+                created_at: incident.created_at,
+                confirmed: incident.root_cause_confirmed,
+                confirmed_by: incident.root_cause_confirmed_by,
+                confirmed_at: incident.root_cause_confirmed_at,
+            };
+            Json(json!(hypothesis))
+        }
+        Ok(None) => Json(json!({"error": "hypothesis not found"})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+pub async fn confirm_hypothesis_handler(
+    State(storage): State<Arc<Storage>>,
+    Path(incident_id): Path<String>,
+    Json(req): Json<ConfirmHypothesisRequest>,
+) -> Json<Value> {
+    use crate::incidents::IncidentStore;
+    let incident_store = IncidentStore::new(storage.pool.clone());
+    match confirm_root_cause(
+        &incident_store,
+        &incident_id,
+        &req.hypothesis_id,
+        req.confirmed,
+        req.actor,
+    )
+    .await
+    {
+        Ok(_) => Json(json!({"status": "ok", "message": "hypothesis confirmation recorded"})),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
 pub fn router(storage: Arc<Storage>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -154,5 +226,14 @@ pub fn router(storage: Arc<Storage>) -> Router {
         .route("/api/v1/monitor/ping", post(ping_handler))
         .route("/api/v1/monitor/tcp", post(tcp_handler))
         .route("/api/v1/topology", get(empty_handler))
+        .route("/api/v1/incidents/hypotheses", get(hypotheses_handler))
+        .route(
+            "/api/v1/incidents/hypotheses/{hypothesis_id}",
+            get(hypothesis_detail_handler),
+        )
+        .route(
+            "/api/v1/incidents/{incident_id}/hypothesis/confirm",
+            post(confirm_hypothesis_handler),
+        )
         .with_state(storage)
 }

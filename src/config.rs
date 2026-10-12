@@ -59,6 +59,41 @@ pub struct SchedulerConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CapacityConfig {
+    pub enabled: Option<bool>,
+    pub interval: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnomalyConfig {
+    pub enabled: Option<bool>,
+    pub interval: Option<u64>,
+    pub min_samples: Option<usize>,
+    pub lookback_window_seconds: Option<i64>,
+    pub sensitivity: Option<f64>,
+    pub min_z_score: Option<f64>,
+    pub enable_spike_detection: Option<bool>,
+    pub enable_drift_detection: Option<bool>,
+    pub enable_pattern_break_detection: Option<bool>,
+}
+
+impl Default for AnomalyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: Some(true),
+            interval: Some(300),
+            min_samples: Some(10),
+            lookback_window_seconds: Some(3600),
+            sensitivity: Some(1.0),
+            min_z_score: Some(3.0),
+            enable_spike_detection: Some(true),
+            enable_drift_detection: Some(true),
+            enable_pattern_break_detection: Some(false),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
     pub agent: AgentConfig,
     pub storage: StorageConfig,
@@ -70,6 +105,8 @@ pub struct Config {
     pub ports: PortsConfig,
     pub snmp: SnmpConfig,
     pub scheduler: SchedulerConfig,
+    pub capacity: CapacityConfig,
+    pub anomaly: AnomalyConfig,
 }
 
 impl Default for Config {
@@ -107,6 +144,11 @@ impl Default for Config {
                 concurrency: 10,
                 rate_limit: 1000,
             },
+            capacity: CapacityConfig {
+                enabled: Some(true),
+                interval: Some(3600),
+            },
+            anomaly: AnomalyConfig::default(),
         }
     }
 }

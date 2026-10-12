@@ -575,7 +575,7 @@ impl IncidentEngine {
         use crate::events::EventType;
 
         match event.event_type {
-            EventType::CheckFailed | EventType::ThresholdBreached => {
+            EventType::CheckFailed | EventType::ThresholdBreached | EventType::AnomalyDetected => {
                 self.handle_firing_event(event).await
             }
             EventType::CheckCompleted | EventType::ThresholdRecovered => {
@@ -624,6 +624,16 @@ impl IncidentEngine {
                     )
                 } else {
                     format!("Threshold breached: {}", event.entity_id)
+                }
+            }
+            EventType::AnomalyDetected => {
+                if let Some(anomaly) = &event.evidence.anomaly {
+                    format!(
+                        "Anomaly detected: {} {} on {} ({})",
+                        anomaly.anomaly_type, anomaly.metric, anomaly.entity_id, anomaly.protocol
+                    )
+                } else {
+                    format!("Anomaly detected: {}", event.entity_id)
                 }
             }
             _ => format!("Event: {}", event.entity_id),
