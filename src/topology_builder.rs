@@ -198,10 +198,8 @@ impl TopologyBuilder {
         if let Some(ipv4_str) = &iface.ipv4 {
             if let Ok(ip) = ipv4_str.parse::<Ipv4Addr>() {
                 // Create subnet node (assuming /24 for now)
-                let subnet_str = format!(
-                    "{}/24",
-                    &ip.to_string()[..ip.to_string().rfind('.').unwrap_or(0) + 1].to_string()
-                );
+                let ip_str = ip.to_string();
+                let subnet_str = format!("{}/24", &ip_str[..ip_str.rfind('.').unwrap_or(0) + 1]);
                 let subnet_id = format!("subnet-{}", subnet_str.replace(['.', '/'], "-"));
 
                 let subnet_node = TopologyNode {
@@ -248,10 +246,8 @@ impl TopologyBuilder {
         if let Some(ipv6_str) = &iface.ipv6 {
             if let Ok(_ip) = ipv6_str.parse::<Ipv6Addr>() {
                 // Create subnet node for IPv6 (assuming /64)
-                let subnet_str = format!(
-                    "{}/64",
-                    &ipv6_str[..ipv6_str.rfind(':').unwrap_or(0) + 1].to_string()
-                );
+                let subnet_str =
+                    format!("{}/64", &ipv6_str[..ipv6_str.rfind(':').unwrap_or(0) + 1]);
                 let subnet_id = format!("subnet-{}", subnet_str.replace([':', '/'], "-"));
 
                 let subnet_node = TopologyNode {

@@ -1,8 +1,10 @@
 # P4 Audit Matrix — Intelligence & Capacity
 
 **Generated:** 2026-10-12
+**Last Updated:** 2026-10-12 23:20 UTC (Checkpoint)
 **Scope:** Objectives 7 (Anomaly Detection), 10 (Root Cause Analysis), 14 (Capacity Planning)
 **Dependencies to verify:** Objectives 1, 2, 3, 5, 11, 13
+**Checkpoint:** See `docs/checkpoints/CHECKPOINT_P4.md`
 
 ---
 
@@ -31,13 +33,31 @@
 
 | # | Feature | Required | Current State | Status |
 |---|---------|----------|---------------|--------|
-| 7.6 | Deviation types: sudden spike, gradual drift, periodic pattern break | ✅ | `AnomalyType::Spike`, `AnomalyType::Drift` implemented; `PatternBreak` defined but not detected | PARTIAL |
+| 7.6 | Deviation types: sudden spike, gradual drift, periodic pattern break | ✅ | `AnomalyType::Spike`, `AnomalyType::Drift`, `AnomalyType::PatternBreak` implemented; `check_pattern_break` in `anomaly.rs:546-680` | **PASS** (NEW: pattern break implemented 2026-10-12) |
 | 7.7 | Evidence: baseline window, current value, z-score or percentile rank | ✅ | `AnomalyEvidence` struct includes all fields | PASS |
 | 7.8 | Configurable: sensitivity, minimum samples, lookback window | ✅ | `AnomalyConfig` in `anomaly.rs` + `config.rs` with full validation | PASS |
 | 7.9 | Correlation: anomaly + recent change + incident | ✅ | Anomaly→incident flow works; change correlation pending | PARTIAL |
 | 7.10 | Each anomaly: rule ID, data points, explanation, confidence | ✅ | `AnomalyEvent` includes rule_id, evidence, description, confidence | PASS |
 | 7.11 | Detector registry: enable/disable per rule, per entity group | ✅ | Global enable/disable via config; per-rule/entity not implemented | PARTIAL |
 | 7.12 | False positive tracking: operator feedback loop | ✅ | Not implemented | FAIL |
+
+### New Features Implemented (Checkpoint 2026-10-12)
+
+| # | Feature | Description | Location |
+|---|---------|-------------|----------|
+| 7.13 | Constant-series spike detection | Uses `min_absolute_change` when stddev ≈ 0 | `anomaly.rs:373-410` |
+| 7.14 | Anomaly deduplication cache | `recent_anomalies` HashMap with configurable cooldown (`anomaly_cooldown_seconds`) | `anomaly.rs:218-220, 546-580` |
+| 7.15 | Separate baseline/check windows | Baseline window excludes last 5 min; check window = last 5 min | `anomaly.rs:522-530` |
+| 7.16 | Drift detection non-overlapping window | Recent window ends at baseline window_start | `anomaly.rs:464-470` |
+| 7.17 | Pattern break detection | Compares recent vs historical windows (mean/variance change ratios); thresholds: 50% mean, 100% stddev | `anomaly.rs:546-680` |
+
+### Known Limitations (Anomaly Detection)
+
+1. **Pattern break thresholds hardcoded** — 50% mean change, 100% stddev change; not exposed in config
+2. **No detector registry** — Per-rule/entity enable/disable not implemented
+3. **No false positive tracking** — No operator feedback loop
+4. **No unit tests** — Implementation verified via E2E only
+5. **Seasonal patterns not handled** — Simple rolling window only
 
 ---
 
@@ -62,6 +82,21 @@
 | 10.8 | Confidence scoring: direct observation > correlation > heuristic | | | Implemented in RootCauseAnalyzer with evidence weighting | PASS |
 | 10.9 | Timeline: changes + anomalies + checks + incidents merged | ✅ | Events have timestamps; drift detection exists; no unified timeline query | PARTIAL |
 
+### New Features Implemented (Checkpoint 2026-10-12)
+
+| # | Feature | Description | Location |
+|---|---------|-------------|----------|
+| 10.10 | Hypothesis.is_root() method | Returns true for root causes (empty dependency_path) | `root_cause.rs:54-60` |
+| 10.11 | Service nodes + DependsOn edges | `TopologyBuilder::add_service_dependency()` creates service nodes with DependsOn edges to devices | `main.rs:300-330`, `topology_builder.rs` |
+
+### Known Limitations (Root Cause Analysis)
+
+1. **4 of 8 unit tests failing** — Likely due to incomplete DependsOn edges and missing symptom grouping
+2. **Symptom grouping not implemented** — No logic to group failing checks by shared dependency
+3. **Service→host→gateway chain incomplete** — DependsOn edges from service checks to devices exist, but full chain to gateway not complete
+4. **No unified timeline query** — Events have timestamps but no merged view
+5. **No unit tests** — Implementation verified via E2E only; `tests/root_cause_tests.rs` created but untested
+
 ---
 
 ## Objective 14: Capacity Planning
@@ -85,6 +120,26 @@
 | 14.8 | Bottleneck identification: top constrained resources | ✅ | `CapacityReport.critical_resources` sorted by time to saturation | PASS |
 | 14.9 | Report: available headroom, projected exhaustion date | ✅ | `CapacityReport::to_markdown` includes all required fields | PASS |
 
+### New Features Implemented (Checkpoint 2026-10-12)
+
+| # | Feature | Description | Location |
+|---|---------|-------------|----------|
+| 14.10 | Nominal capacity config | `CapacityConfig.nominal_capacity` option; if set, used as 100% reference; else falls back to max observed | `capacity_planning.rs:19-25, 311-325` |
+| 14.11 | Capacity source tracking | `capacity_source` field in `TrendAnalysis`: "nominal_capacity" or "max_observed_proxy" | `capacity_planning.rs:94-97, 311-325, 394-398` |
+| 14.12 | Timestamp-based linear regression | Uses actual timestamps (seconds since window_start) as x-values instead of sequential indices | `capacity_planning.rs:277-290` |
+| 14.13 | Denominator zero check | Handles identical timestamps (denominator ≈ 0) gracefully with error | `capacity_planning.rs:289-295` |
+| 14.14 | Protocol field in TrendAnalysis | Added `protocol` field for better identification | `capacity_planning.rs:67, 395` |
+| 14.15 | Reports include capacity source | Markdown/JSON reports show "nominal_capacity" or "max_observed_proxy" | `capacity_planning.rs:438-452` |
+| 14.16 | Uncertainty disclaimer enhanced | Notes that max-observed proxy may underestimate true capacity | `capacity_planning.rs:515-518` |
+
+### Known Limitations (Capacity Planning)
+
+1. **No confidence intervals** — `confidence_level` config (default 0.95) stored but not used for interval computation
+2. **No exponential fit** — Only linear regression implemented
+3. **SNMP utilization data blocked** — Objective 5 not implemented; only latency trends available
+4. **No unit tests** — Implementation verified manually only; `tests/capacity_tests.rs` created but untested
+5. **Max-observed proxy risk** — Using max observed as capacity reference may underestimate true capacity
+
 ---
 
 ## Dependency Audit — Data Sources for P4
@@ -106,9 +161,27 @@
 
 | Objective | Overall Status | Blockers |
 |-----------|----------------|----------|
-| **7. Anomaly Detection** | **PARTIAL** | Unit tests for detector; per-rule/entity detector registry; pattern break detection; false positive tracking; change correlation |
-| **10. Root Cause Analysis** | **PARTIAL** | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs DependsOn edges for service→gateway |
-| **14. Capacity Planning** | **PARTIAL** | Unit tests for planner; SNMP utilization data; exponential fit; confidence intervals |
+| **7. Anomaly Detection** | **PARTIAL** | Unit tests for detector; per-rule/entity detector registry; pattern break config exposure; false positive tracking; change correlation |
+| **10. Root Cause Analysis** | **PARTIAL** | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs complete DependsOn edges for service→gateway chain; symptom grouping; fix 4/8 failing tests |
+| **14. Capacity Planning** | **PARTIAL** | Unit tests for planner; SNMP utilization data; confidence intervals; exponential fit |
+
+### Critical Path for P4 Implementation
+
+1. **Objective 10** (Root Cause Analysis): Complete DependsOn edges for service→host→gateway chain; implement symptom grouping; fix failing tests
+2. **Objective 7 enhancement**: Add unit tests for `AnomalyDetector`; implement detector registry; expose pattern break thresholds in config; add drift→anomaly correlation
+3. **Objective 14 enhancement**: Add unit tests for `CapacityPlanner`; implement confidence intervals; integrate SNMP utilization data when Obj 5 complete
+4. **Objective 5** (SNMP): Implement IF-MIB polling for interface utilization; this unblocks Obj 14 utilization trends
+5. **Objective 11 enhancement**: Add drift→incident correlation; this enriches Obj 7 and Obj 10 timelines
+
+### Recommended P4 Implementation Order
+
+1. **Obj 10**: Complete DependsOn edges + symptom grouping + fix failing tests
+2. **Obj 7.3**: Unit tests for anomaly detector (spike, drift, baseline, pattern break)
+3. **Obj 7.11, 7.13**: Detector registry + pattern break config exposure
+4. **Obj 14.3-14.4**: Capacity CLI/API + unit tests + confidence intervals
+5. **Obj 7.12**: False positive tracking
+6. **Obj 5**: SNMP IF-MIB polling
+7. **Obj 11**: Drift→incident correlation
 
 ### Critical Path for P4 Implementation
 
@@ -144,6 +217,11 @@
 - Fixed `get_monitored_entities()` query: Changed `WHERE value > 0` to `WHERE observed_at >= datetime('now', '-1 hour')` to include all recent entities
 - Fixed `analyze_and_emit()`: Now checks ALL recent observations (last 5 min) instead of only the most recent value
 - Fixed indentation and loop structure for proper anomaly emission
+- **NEW: Added anomaly deduplication cache** (`recent_anomalies` HashMap) with configurable cooldown (`anomaly_cooldown_seconds`)
+- **NEW: Added constant-series spike detection** using `min_absolute_change` threshold when stddev ≈ 0
+- **NEW: Added pattern break detection** (`check_pattern_break`) comparing recent vs historical windows
+- **NEW: Separate baseline/check windows** — baseline excludes last 5 min; check window = last 5 min
+- **NEW: Drift detection uses non-overlapping recent window** ending at baseline window_start
 
 ### CapacityPlanner (`src/capacity_planning.rs`)
 - Fixed `get_resource_ids()`: Now returns `entity_id:metric:protocol` format (3 parts) instead of `device_id:metric` (2 parts)
@@ -151,15 +229,32 @@
 - Added `get_latency_observations_with_timestamps()` to `Storage` for proper time series regression
 - Fixed saturation threshold calculation: Now uses `max_observed * (saturation_threshold_pct / 100.0)` from config instead of hardcoded 1000ms
 - Fixed `TrendAnalysis` construction: Uses actual `entity_id`, `window_start`, `window_end`, and config `confidence_level`
+- **NEW: Added `nominal_capacity` config option** with fallback to max-observed proxy
+- **NEW: Added `capacity_source` field** tracking "nominal_capacity" vs "max_observed_proxy"
+- **NEW: Added denominator zero check** for identical timestamps
+- **NEW: Added `protocol` field** to `TrendAnalysis`
+- **NEW: Reports include capacity source** and enhanced uncertainty disclaimer
 
 ### RootCauseAnalyzer (`src/root_cause.rs`)
 - Fixed `get_failing_observations()`: Changed query from `value = 0` to `confidence = 'low'` to accurately detect failed checks
+- **NEW: Added `Hypothesis::is_root()` method** to identify root causes (empty dependency_path)
 
 ### Main Application (`src/main.rs`)
 - Added `IncidentEngine` initialization and wiring to `EventBus` via `subscribe()`
 - Added `IncidentEngine` background task alongside scheduler
 - Properly aborts both scheduler and incident engine on shutdown
+- **NEW: Removed `discover local` CLI subcommand** (simplified CLI)
+- **NEW: Simplified capacity CLI handler**
+- **NEW: Fixed `event_bus.clone()` for scheduler registration**
+- **NEW: Fixed shutdown signal handling block syntax**
 
 ### Configuration (`config.example.yaml`)
 - Added `capacity` section with `enabled` and `interval` options
 - Added `anomaly` section with all detector configuration options
+- **NEW: Added `anomaly_cooldown_seconds: 300` and `min_absolute_change: 10.0`**
+
+### Documentation
+- Created `docs/checkpoints/CHECKPOINT_P4.md` with full checkpoint documentation
+- Updated `docs/ROADMAP.md` with current P4 status
+- Updated `docs/IMPLEMENTATION_STATUS.md` with current implementation state
+- Updated `docs/audits/P4_AUDIT.md` with current audit state

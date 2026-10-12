@@ -88,7 +88,7 @@ pub enum EventState {
     Closed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EventEvidence {
     pub check_result: Option<CheckEvidence>,
     pub threshold: Option<ThresholdEvidence>,
@@ -197,7 +197,7 @@ impl Event {
 }
 
 impl EventType {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             EventType::CheckCompleted => "check_completed",
             EventType::CheckFailed => "check_failed",

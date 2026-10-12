@@ -377,22 +377,18 @@ impl IncidentStore {
     }
 
     pub async fn create(&self, incident: &Incident) -> Result<Incident, IncidentError> {
-        use sqlx::query;
-
         let evidence_json = serde_json::to_string(&incident.evidence)?;
         let labels_json = serde_json::to_string(&incident.labels)?;
         let transitions_json = serde_json::to_string(&incident.transitions)?;
 
-        query(
-            r#"
-            INSERT INTO incidents (
-                id, dedup_key, correlation_id, entity_id, entity_type, severity, state,
-                title, description, evidence, labels, created_at, updated_at,
-                acknowledged_at, acknowledged_by, resolved_at, resolved_by, closed_at,
-                transitions, cooldown_until, silence_until,
-                root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
+        sqlx::query(
+            "INSERT INTO incidents (\
+                id, dedup_key, correlation_id, entity_id, entity_type, severity, state,\
+                title, description, evidence, labels, created_at, updated_at,\
+                acknowledged_at, acknowledged_by, resolved_at, resolved_by, closed_at,\
+                transitions, cooldown_until, silence_until,\
+                root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by\
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&incident.id)
         .bind(&incident.dedup_key)
@@ -544,7 +540,7 @@ pub async fn confirm_root_cause(
 
 /// Incident Engine - consumes events from EventBus and manages incident lifecycle
 pub struct IncidentEngine {
-    store: IncidentStore,
+    pub store: IncidentStore,
     event_bus: broadcast::Receiver<crate::events::Event>,
     cooldown_seconds: u64,
 }
@@ -571,7 +567,7 @@ impl IncidentEngine {
         Ok(())
     }
 
-    async fn process_event(&mut self, event: crate::events::Event) -> Result<()> {
+    pub async fn process_event(&mut self, event: crate::events::Event) -> Result<()> {
         use crate::events::EventType;
 
         match event.event_type {

@@ -20,7 +20,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - **P1**: 🔄 In Progress — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
 - **P2**: 🔄 In Progress — Topology builder with Mermaid/DOT/JSON exports complete; SNMP collector placeholder; inventory tables exist but empty
 - **P3**: 🔄 In Progress — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
-- **P4**: 🔄 In Progress — Anomaly detection (spike/drift detection complete, EventBus integration complete, IncidentEngine integration complete; unit tests + detector registry pending); Root cause analysis (Planned); Capacity planning (linear regression complete, reports complete, scheduler integration complete; CLI/API + unit tests + SNMP data pending)
+- **P4**: 🔄 In Progress — Anomaly detection (spike/drift/pattern break detection complete, EventBus integration complete, IncidentEngine integration complete, deduplication cache, constant-series handling; **unit tests + detector registry + false positive tracking pending**); Root cause analysis (**Partial** — RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**); Capacity planning (linear regression complete with timestamps, time-to-saturation, markdown/JSON reports, scheduler integration complete; **CLI/API exposed, unit tests + SNMP utilization data + confidence intervals + exponential fit pending**)
 - **P5**: Planned — Distributed agents, traffic analysis
 
 ---
@@ -232,22 +232,31 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Baselines: rolling p50/p95/p99 latency, volume, check frequency per entity
 - Deviation types: sudden spike, gradual drift, periodic pattern break
 - Evidence: baseline window, current value, z-score or percentile rank
-- Configurable: sensitivity, minimum samples, lookback window
+- Configurable: sensitivity, minimum samples, lookback window, anomaly cooldown, min absolute change
 - Correlation: anomaly + recent change (deploy, config, topology) + incident
 - Each anomaly: rule ID, data points, explanation, confidence
 - Detector registry: enable/disable per rule, per entity group
 - False positive tracking: operator feedback loop
 
 ### Acceptance Criteria
-- [ ] Baseline computed from last N observations (configurable)
-- [ ] Anomaly event includes: rule, entity, baseline stats, current value, evidence
-- [ ] Unit test: synthetic baseline + injected spike → anomaly fired with correct evidence
-- [ ] Correlation test: anomaly during known change window → linked in incident timeline
-- [ ] No ML dependency in core; optional model behind feature flag
+- [x] Baseline computed from last N observations (configurable) — `AnomalyDetector::compute_baseline` in `anomaly.rs:241-300`
+- [x] Anomaly event includes: rule, entity, baseline stats, current value, evidence — `AnomalyEvent` + `AnomalyEvidence` in `anomaly.rs:125-141`, `events.rs:124-142`
+- [ ] Unit test: synthetic baseline + injected spike → anomaly fired with correct evidence — **Implementation complete; unit tests pending**
+- [ ] Correlation test: anomaly during known change window → linked in incident timeline — Anomaly→incident flow works; change correlation pending
+- [x] No ML dependency in core; optional model behind feature flag — No ML deps
+
+### Additional Implemented Features (Checkpoint 2026-10-12)
+- [x] Constant-series spike detection (zero stddev) using `min_absolute_change` threshold
+- [x] Anomaly deduplication cache with configurable cooldown (`anomaly_cooldown_seconds`)
+- [x] Pattern break detection comparing recent vs historical windows (mean/variance change)
+- [x] Drift detection uses non-overlapping recent window (ends at baseline window_start)
+- [x] Separate baseline window (excl. last 5 min) and check window (last 5 min)
 
 ### Risks
 - Seasonal patterns (daily/weekly) need sufficient history; start with simple rolling window
 - Alert fatigue: tune cooldowns, require sustained deviation
+- Pattern break thresholds hardcoded (50% mean, 100% stddev); no config exposure yet
+- False positive rate unknown for pattern break; no feedback loop implemented
 
 ---
 
@@ -324,14 +333,20 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Timeline: changes + anomalies + checks + incidents merged
 
 ### Acceptance Criteria
-- [ ] Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8
-- [ ] Hypothesis includes: evidence checks, topology path, time correlation
-- [ ] Operator can mark hypothesis as confirmed; stored in incident
-- [ ] No hypothesis presented as fact without evidence
-- [ ] Unit test: topology fixture + check results → correct hypothesis ranked first
+- [ ] Given gateway failure + 5 device failures → hypothesis "gateway" with confidence > 0.8 — **PARTIAL: DependsOn edges partially implemented; symptom grouping missing**
+- [x] Hypothesis includes: evidence checks, topology path, time correlation — `Hypothesis` struct in `root_cause.rs:13-34`
+- [x] Operator can mark hypothesis as confirmed; stored in incident — `Incident` model + `confirm_root_cause` API in `api.rs:217-240`
+- [x] No hypothesis presented as fact without evidence — `Hypothesis.confidence` + `evidence` fields enforced
+- [ ] Unit test: topology fixture + check results → correct hypothesis ranked first — **Implementation complete; unit tests pending (4/8 failing)**
+
+### Current State (Checkpoint 2026-10-12)
+- **Implemented:** RootCauseAnalyzer with evidence weighting, Hypothesis model with dependency_path/time_window/confidence, operator confirmation API, `Hypothesis.is_root()` method
+- **Partial:** Dependency graph — GatewayOf edges exist; DependsOn edges from service checks to devices added; service→host→gateway chain incomplete
+- **Missing:** Symptom grouping logic; unified timeline query; unit tests (4/8 failing)
 
 ### Risks
 - Correlation ≠ causation: always label as "probable cause", store confidence
+- Incomplete dependency graph limits hypothesis accuracy
 
 ---
 
@@ -426,13 +441,28 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - Report: available headroom, projected exhaustion date
 
 ### Acceptance Criteria
-- [ ] Trend computed from last 30d of utilization samples
-- [ ] Projection includes: model type, R², assumption (linear growth)
-- [ ] Report generated via CLI/API, includes uncertainty disclaimer
-- [ ] Unit test: synthetic linear growth → predicted date within 10%
+- [x] Trend computed from last 30d of utilization samples — **Using latency data; SNMP utilization pending Objective 5**
+- [x] Projection includes: model type, R², assumption (linear growth) — `TrendAnalysis` in `capacity_planning.rs:60-92`
+- [x] Report generated via CLI/API, includes uncertainty disclaimer — `netwatch capacity report` + `/api/v1/capacity/report`; markdown/JSON
+- [ ] Unit test: synthetic linear growth → predicted date within 10% — **Implementation complete; unit tests pending**
+
+### Additional Implemented Features (Checkpoint 2026-10-12)
+- [x] Linear regression uses actual timestamps (seconds since window_start) not sequential indices
+- [x] Saturation threshold uses configurable percentage of max observed (or nominal_capacity if set)
+- [x] `capacity_source` field tracks "nominal_capacity" vs "max_observed_proxy"
+- [x] Denominator zero check for identical timestamps
+- [x] Reports include capacity source and uncertainty disclaimer
+- [x] Scheduler integration complete (runs at configured interval)
+
+### Gaps Remaining
+- [ ] Confidence intervals for time-to-saturation (config `confidence_level` stored but not used for intervals)
+- [ ] Exponential fit alternative to linear regression
+- [ ] SNMP utilization data (interface, CPU, memory) — blocked on Objective 5
+- [ ] Unit tests for CapacityPlanner
 
 ### Risks
 - Non-linear growth (step changes): detect and segment
+- Max-observed proxy underestimates true capacity; nominal_capacity config mitigates but requires manual input
 
 ---
 

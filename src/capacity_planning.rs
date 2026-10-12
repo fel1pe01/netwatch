@@ -19,6 +19,9 @@ pub struct CapacityConfig {
     pub confidence_level: f64,
     /// Enable capacity planning
     pub enabled: bool,
+    /// Nominal capacity for resources (optional, per metric/protocol)
+    /// If not set, max observed value is used as proxy with a warning
+    pub nominal_capacity: Option<f64>,
 }
 
 impl Default for CapacityConfig {
@@ -29,6 +32,7 @@ impl Default for CapacityConfig {
             saturation_threshold_pct: 80.0,
             confidence_level: 0.95,
             enabled: true,
+            nominal_capacity: None,
         }
     }
 }
@@ -63,6 +67,7 @@ pub struct TrendAnalysis {
     pub resource_type: ResourceType,
     pub entity_id: String,
     pub metric: String,
+    pub protocol: String,
     /// Linear regression slope (rate of change per second)
     pub slope: f64,
     /// Linear regression intercept
@@ -89,6 +94,8 @@ pub struct TrendAnalysis {
     pub analyzed_at: DateTime<Utc>,
     /// Warning: insufficient data for reliable projection
     pub insufficient_data_warning: bool,
+    /// Source of capacity reference: "nominal_capacity" or "max_observed_proxy"
+    pub capacity_source: String,
 }
 
 /// Capacity planning report
@@ -164,11 +171,18 @@ impl CapacityPlanner {
             let metric = parts[1];
             let protocol = parts[2];
 
-            // Get latency observations for trend analysis
-            let values = self
+            // Get latency observations with timestamps for trend analysis (single query)
+            let observations = self
                 .storage
-                .get_latency_observations(entity_id, protocol, window_start, Some(window_end))
+                .get_latency_observations_with_timestamps(
+                    entity_id,
+                    protocol,
+                    window_start,
+                    Some(window_end),
+                )
                 .await?;
+
+            let values: Vec<f64> = observations.iter().map(|o| o.value).collect();
 
             if values.len() < self.config.min_samples {
                 insufficient_data.push(format!(
@@ -180,23 +194,36 @@ impl CapacityPlanner {
                 continue;
             }
 
-            // Perform linear regression
-            let trend = self.perform_linear_regression(
-                entity_id,
-                metric,
-                "latency",
-                &values,
-                window_start,
-                window_end,
-            )?;
+            // Perform linear regression using the observations directly
+            let trend_result = self
+                .perform_linear_regression(
+                    entity_id,
+                    metric,
+                    protocol,
+                    &observations,
+                    window_start,
+                    window_end,
+                )
+                .await;
 
-            if trend.insufficient_data_warning {
-                insufficient_data.push(format!(
-                    "{}:{} (regression R²={:.3})",
-                    entity_id, metric, trend.r_squared
-                ));
-            } else {
-                trends.push(trend);
+            match trend_result {
+                Ok(trend) => {
+                    if trend.insufficient_data_warning {
+                        insufficient_data.push(format!(
+                            "{}:{} (regression R²={:.3})",
+                            entity_id, metric, trend.r_squared
+                        ));
+                    } else {
+                        trends.push(trend);
+                    }
+                }
+                Err(e) => {
+                    // Handle regression errors gracefully (e.g., identical timestamps)
+                    insufficient_data.push(format!(
+                        "{}:{} (regression error: {})",
+                        entity_id, metric, e
+                    ));
+                }
             }
         }
 
@@ -250,35 +277,32 @@ impl CapacityPlanner {
 
     /// Perform linear regression on time series data
     #[allow(clippy::too_many_arguments)]
-    fn perform_linear_regression(
+    async fn perform_linear_regression(
         &self,
         entity_id: &str,
         metric: &str,
         protocol: &str,
-        values: &[f64],
+        observations: &[crate::storage::Observation],
         window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
     ) -> Result<TrendAnalysis> {
-        let n = values.len();
+        let n = observations.len();
         if n < 2 {
             return Err(anyhow::anyhow!("Insufficient data points for regression"));
         }
 
-        // Get observations with timestamps for proper time series regression
-        let observations = self
-            .storage
-            .get_latency_observations_with_timestamps(entity_id, protocol, window_start, Some(window_end))
-            .await?;
-        
-        if observations.len() != values.len() {
-            return Err(anyhow::anyhow!("Mismatch between values and observations"));
-        }
+        // Extract values and timestamps from observations (already ordered by observed_at ASC)
+        let y: Vec<f64> = observations.iter().map(|o| o.value).collect();
 
         // Use actual timestamps (seconds since window_start) as x-values
-        let x: Vec<f64> = observations.iter()
+        let x: Vec<f64> = observations
+            .iter()
             .map(|obs| (obs.observed_at - window_start).num_seconds() as f64)
             .collect();
-        let y = values.to_vec();
+
+        // Verify temporal ordering (observations should be ASC by observed_at)
+        // If out of order, we still proceed but log a warning via the insufficient_data_warning flag
+        let is_ordered = x.windows(2).all(|w| w[0] <= w[1]);
 
         // Calculate linear regression: y = a + bx
         let sum_x: f64 = x.iter().sum();
@@ -287,7 +311,16 @@ impl CapacityPlanner {
         let sum_x2: f64 = x.iter().map(|xi| xi * xi).sum();
 
         let n_f = n as f64;
-        let slope = (n_f * sum_xy - sum_x * sum_y) / (n_f * sum_x2 - sum_x * sum_x);
+        let denominator = n_f * sum_x2 - sum_x * sum_x;
+
+        // Handle edge case: all x values are the same (denominator = 0)
+        if denominator.abs() < f64::EPSILON {
+            return Err(anyhow::anyhow!(
+                "Cannot compute regression: all timestamps are identical"
+            ));
+        }
+
+        let slope = (n_f * sum_xy - sum_x * sum_y) / denominator;
         let intercept = (sum_y - slope * sum_x) / n_f;
 
         // Calculate R²
@@ -298,8 +331,11 @@ impl CapacityPlanner {
             .enumerate()
             .map(|(i, yi)| (yi - (intercept + slope * x[i])).powi(2))
             .sum();
+        // For constant series (ss_tot = 0), if ss_res is also 0, it's a perfect fit (R² = 1.0)
         let r_squared = if ss_tot > 0.0 {
             1.0 - ss_res / ss_tot
+        } else if ss_res.abs() < f64::EPSILON {
+            1.0 // Perfect fit for constant series
         } else {
             0.0
         };
@@ -311,15 +347,27 @@ impl CapacityPlanner {
             0.0
         };
 
-        // Current value (most recent)
-        let current_value = *values.last().unwrap_or(&0.0);
+        // Current value (most recent observation)
+        let current_value = *y.last().unwrap_or(&0.0);
 
-        // Calculate saturation threshold based on config percentage
-        // Use the max observed value as 100%, then saturation_threshold_pct% of that
-        let max_observed = y.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
-        let saturation_threshold = max_observed * (self.config.saturation_threshold_pct / 100.0);
+        // Calculate saturation threshold
+        // If nominal_capacity is configured, use it as 100% reference
+        // Otherwise fall back to max observed value with a warning flag
+        let (saturation_threshold, capacity_source) =
+            if let Some(nominal) = self.config.nominal_capacity {
+                (
+                    nominal * (self.config.saturation_threshold_pct / 100.0),
+                    "nominal_capacity",
+                )
+            } else {
+                let max_observed = y.iter().fold(f64::NEG_INFINITY, |a, &b| a.max(b));
+                (
+                    max_observed * (self.config.saturation_threshold_pct / 100.0),
+                    "max_observed_proxy",
+                )
+            };
 
-        // Calculate time to saturation if slope > 0
+        // Calculate time to saturation if slope > 0 and current_value < threshold
         let time_to_saturation = if slope > 0.0 && current_value < saturation_threshold {
             let seconds_to_saturation = (saturation_threshold - current_value) / slope;
             if seconds_to_saturation > 0.0 {
@@ -332,7 +380,7 @@ impl CapacityPlanner {
         };
 
         // Determine if data is sufficient for reliable projection
-        let insufficient_data_warning = n < 10 || r_squared < 0.3;
+        let insufficient_data_warning = n < 10 || r_squared < 0.3 || !is_ordered;
 
         // Determine resource type from metric
         let resource_type = if metric.contains("latency") {
@@ -346,6 +394,7 @@ impl CapacityPlanner {
             resource_type,
             entity_id: entity_id.to_string(),
             metric: metric.to_string(),
+            protocol: protocol.to_string(),
             slope,
             intercept,
             r_squared,
@@ -359,6 +408,7 @@ impl CapacityPlanner {
             confidence_level: self.config.confidence_level,
             analyzed_at: Utc::now(),
             insufficient_data_warning,
+            capacity_source: capacity_source.to_string(),
         })
     }
 }
@@ -388,18 +438,19 @@ impl CapacityReport {
 
         if !self.critical_resources.is_empty() {
             md.push_str("## Critical Resources (Time to Saturation)\n\n");
-            md.push_str("| Resource | Entity | Current Value | Saturation Threshold | Time to Saturation | R² |\n");
-            md.push_str("|----------|--------|---------------|---------------------|-------------------|----|\n");
+            md.push_str("| Resource | Entity | Current Value | Saturation Threshold | Capacity Source | Time to Saturation | R² |\n");
+            md.push_str("|----------|--------|---------------|---------------------|-----------------|-------------------|----|\n");
             for trend in &self.critical_resources {
                 let time_to_sat = trend.time_to_saturation.map_or("N/A".to_string(), |t| {
                     t.format("%Y-%m-%d %H:%M:%S UTC").to_string()
                 });
                 md.push_str(&format!(
-                    "| {} | {} | {:.2} | {:.2} | {} | {:.3} |\n",
+                    "| {} | {} | {:.2} | {:.2} | {} | {} | {:.3} |\n",
                     trend.metric,
                     trend.entity_id,
                     trend.current_value,
                     trend.saturation_threshold,
+                    trend.capacity_source,
                     time_to_sat,
                     trend.r_squared
                 ));
@@ -409,8 +460,12 @@ impl CapacityReport {
 
         if !self.trends.is_empty() {
             md.push_str("## All Trends\n\n");
-            md.push_str("| Resource | Entity | Slope | R² | Samples | Warning |\n");
-            md.push_str("|----------|--------|-------|-----|---------|--------|\n");
+            md.push_str(
+                "| Resource | Entity | Slope | R² | Samples | Capacity Source | Warning |\n",
+            );
+            md.push_str(
+                "|----------|--------|-------|-----|---------|-----------------|--------|\n",
+            );
             for trend in &self.trends {
                 let warning = if trend.insufficient_data_warning {
                     "⚠️ Insufficient data"
@@ -418,12 +473,13 @@ impl CapacityReport {
                     ""
                 };
                 md.push_str(&format!(
-                    "| {} | {} | {:.6} | {:.3} | {} | {} |\n",
+                    "| {} | {} | {:.6} | {:.3} | {} | {} | {} |\n",
                     trend.metric,
                     trend.entity_id,
                     trend.slope,
                     trend.r_squared,
                     trend.sample_count,
+                    trend.capacity_source,
                     warning
                 ));
             }
@@ -455,10 +511,18 @@ impl CapacityReport {
             "- **Confidence Level:** {}\n",
             self.config_used.confidence_level
         ));
+        md.push_str(&format!(
+            "- **Nominal Capacity:** {}\n",
+            self.config_used.nominal_capacity.map_or(
+                "not set (using max observed proxy)".to_string(),
+                |v| format!("{}", v)
+            )
+        ));
         md.push_str(&format!("- **Enabled:** {}\n", self.config_used.enabled));
 
         md.push_str("\n---\n");
         md.push_str("*This report is generated automatically. Projections are based on linear regression and should be validated with domain expertise.*\n");
+        md.push_str("*Note: When nominal capacity is not configured, saturation threshold is calculated as a percentage of the maximum observed value, which may underestimate true capacity.*\n");
 
         md
     }

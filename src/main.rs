@@ -522,55 +522,20 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Some(NetwatchCommand::Capacity { kind }) => {
-            match kind {
-                CapacityKind::Report { format } => {
-                    let storage = Storage::connect(&Config::default().storage.path).await?;
-                    let config = CapacityConfig::default();
-                    let mut planner = CapacityPlanner::new(Arc::new(storage), config);
-                    let report = planner.analyze_capacity().await?;
-                    
-                    match format.as_str() {
-                        "json" => println!("{}", report.to_json()?),
-                        _ => println!("{}", report.to_markdown()),
-                    }
-                    return Ok(());
+        Some(NetwatchCommand::Capacity { kind }) => match kind {
+            CapacityKind::Report { format } => {
+                let storage = Storage::connect(&Config::default().storage.path).await?;
+                let config = CapacityConfig::default();
+                let mut planner = CapacityPlanner::new(Arc::new(storage), config);
+                let report = planner.analyze_capacity().await?;
+
+                match format.as_str() {
+                    "json" => println!("{}", report.to_json()?),
+                    _ => println!("{}", report.to_markdown()),
                 }
+                return Ok(());
             }
-            return Ok(());
-        }
-        Some(NetwatchCommand::Discover { kind }) => {
-            match kind {
-                DiscoverKind::Local => {
-                    let interfaces = discover_interfaces().await.unwrap_or_default();
-                    let routes = discover_routes().await.unwrap_or_default();
-                    println!("Discovered {} interfaces:", interfaces.len());
-                    for iface in interfaces {
-                        println!(
-                            "  - name: {}, state: {}, ip4: {}, ip6: {}, mac: {}, mtu: {}",
-                            iface.name,
-                            iface.oper_state.unwrap_or_else(|| "unknown".to_string()),
-                            iface.ipv4.unwrap_or_else(|| "none".to_string()),
-                            iface.ipv6.unwrap_or_else(|| "none".to_string()),
-                            iface.mac.unwrap_or_else(|| "none".to_string()),
-                            iface.mtu.unwrap_or(0)
-                        );
-                    }
-                    println!("Discovered {} routes:", routes.len());
-                    for rt in routes {
-                        println!(
-                            "  - dest: {}, via: {}, dev: {}, metric: {}, mask: {}",
-                            rt.destination,
-                            rt.gateway.unwrap_or_else(|| "none".to_string()),
-                            rt.interface,
-                            rt.metric.map_or("none".to_string(), |m| m.to_string()),
-                            rt.mask.unwrap_or_else(|| "none".to_string())
-                        );
-                    }
-                }
-            }
-            return Ok(());
-        }
+        },
         None => {
             // Server mode handled below
         }
@@ -614,7 +579,7 @@ async fn main() -> Result<()> {
     let mut scheduler = Scheduler::new(config.scheduler.concurrency);
 
     // Register health check jobs from config
-    register_monitoring_jobs(&mut scheduler, storage.clone(), event_bus, &config).await?;
+    register_monitoring_jobs(&mut scheduler, storage.clone(), event_bus.clone(), &config).await?;
 
     // Register topology discovery job
     if config.discovery.enabled && config.discovery.interval > 0 {
@@ -732,7 +697,7 @@ async fn main() -> Result<()> {
         tracing::info!("Shutdown signal received");
         // Give scheduler time to finish current jobs
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    }
+    };
 
     // Start HTTP server
     let addr: SocketAddr = config.agent.listen.parse()?;

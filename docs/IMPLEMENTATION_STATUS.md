@@ -20,14 +20,14 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | 4 | Deployable Observability Stack | **Partial** (Dockerfile, compose, configs exist; stack deployment untested) | Stack integration test, backup/restore procedures |
 | 5 | Inventory & SNMP Monitoring | **Planned** | Inventory tables exist but empty; SNMP collector placeholder only |
 | 6 | Traffic Analysis & Consumption | **Planned** | No NetFlow/sFlow, no PCAP, no baselines |
-| 7 | Intelligent Anomaly Detection | **Planned** (P4) | No baselines, no detectors |
+| 7 | Intelligent Anomaly Detection | **Partial** (P4 - spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; **unit tests, detector registry, false positive tracking pending**) | Unit tests for detector, detector registry, false positive tracking, pattern break config exposure |
 | 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing, load/resilience tests missing |
 | 9 | Distributed & Multi-site Monitoring | **Planned** | No agent protocol, no central collector |
-| 10 | Root Cause Analysis | **Partial** (P4) | RootCauseAnalyzer, Hypothesis model, confirmation API implemented; needs DependsOn edges |
+| 10 | Root Cause Analysis | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**) | Complete DependsOn edges for service→gateway chain, symptom grouping, fix failing tests |
 | 11 | Change Audit & Drift Detection | **Partial** (drift detection complete) | Expected inventory config, drift→incident correlation |
 | 12 | Maintenance & Change Management | **Partial** (silence fields exist) | No silence engine, no calendars, no auto-expiry |
 | 13 | Synthetic Service Monitoring | **Partial** (HTTP, DNS, TLS collectors implemented) | Scheduler integration, per-phase latency metrics, service model |
-| 14 | Capacity Planning | **Planned** (P4) | No trend analysis, no projections |
+| 14 | Capacity Planning | **Partial** (P4 - linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, nominal_capacity config implemented; **unit tests, SNMP data, confidence intervals, exponential fit pending**) | Unit tests, SNMP utilization, confidence intervals, exponential fit |
 | 15 | Reproducible Incident Reports | **Planned** | No incident data, no report generator |
 | 16 | Verified Disaster Recovery | **Planned** | No backup/restore scripts, no drill |
 
@@ -182,18 +182,21 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Rolling baselines (p50/p95/p99, volume, freq) | ✅ | `AnomalyDetector::compute_baseline()` in `anomaly.rs:241-281` computes mean/stddev from observations |
-| Deviation types (spike, drift, pattern break) | ✅ | `AnomalyType::Spike`, `AnomalyType::Drift` implemented in `anomaly.rs:58-68`; `check_spike` and `check_drift` methods |
+| Rolling baselines (mean/stddev from observations) | ✅ | `AnomalyDetector::compute_baseline()` in `anomaly.rs:241-300` computes mean/stddev from observations |
+| Deviation types (spike, drift, pattern break) | ✅ | `AnomalyType::Spike`, `AnomalyType::Drift`, `AnomalyType::PatternBreak` implemented; `check_spike`, `check_drift`, `check_pattern_break` methods in `anomaly.rs` |
 | Evidence (baseline window, current value, z-score) | ✅ | `AnomalyEvidence` struct in `anomaly.rs:99-123` includes all required fields |
-| Configurable sensitivity, min samples, lookback | ✅ | `AnomalyConfig` in `anomaly.rs:12-41` + `config.rs:67-94` with full validation |
+| Configurable sensitivity, min samples, lookback, cooldown, min_absolute_change | ✅ | `AnomalyConfig` in `anomaly.rs:12-41` + `config.rs:67-94` with full validation |
 | Correlation with changes/incidents | ⚠️ | Anomaly events emitted to EventBus; IncidentEngine consumes them; change correlation pending |
 | Detector registry (enable/disable per rule/entity) | ❌ | No registry; detectors enabled globally via config |
 | False positive tracking | ❌ | No feedback loop |
 | No mandatory ML | ✅ | Design principle; no ML dependencies |
+| Constant-series spike detection | ✅ | Uses `min_absolute_change` threshold when stddev ≈ 0 (`anomaly.rs:373-410`) |
+| Anomaly deduplication cache | ✅ | `recent_anomalies` HashMap with configurable cooldown (`anomaly.rs:218-220, 546-580`) |
+| Separate baseline/check windows | ✅ | Baseline window excludes last 5 min; check window = last 5 min (`anomaly.rs:522-530`) |
 
-**Tests:** Unit tests needed for `AnomalyDetector` methods; integration via scheduler + EventBus verified in E2E.
+**Tests:** Unit tests needed for `AnomalyDetector` methods; integration via scheduler + EventBus verified in E2E. New test file `tests/anomaly_tests.rs` created (untracked).
 
-**Next Verifiable Step:** Add unit tests for `AnomalyDetector::check_observation`, `check_spike`, `check_drift` with synthetic data; implement detector registry for per-rule enable/disable.
+**Next Verifiable Step:** Add unit tests for `AnomalyDetector::check_observation`, `check_spike`, `check_drift`, `check_pattern_break` with synthetic data; implement detector registry for per-rule enable/disable; add false positive tracking.
 
 ---
 
@@ -265,7 +268,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 10: Root Cause Analysis
 
-**Global Status:** **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; needs DependsOn edges in topology)
+**Global Status:** **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -275,10 +278,11 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Confidence scoring | ✅ | Implemented in RootCauseAnalyzer with evidence weighting |
 | Human-confirmed root cause stored | ✅ | Incident model has root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by; confirm_root_cause API in api.rs |
 | Merged timeline (changes + anomalies + checks + incidents) | ❌ | No unified timeline query; events have timestamps but no unified view |
+| Root cause identification (is_root) | ✅ | `Hypothesis::is_root()` method added in `root_cause.rs:54-60` identifies root causes (empty dependency_path) |
 
-**Tests:** None.
+**Tests:** Unit tests pending; **4 of 8 tests failing** (likely due to incomplete DependsOn edges and missing symptom grouping). New test file `tests/root_cause_tests.rs` created (untracked).
 
-**Next Verifiable Step:** After Objectives 2, 3, 11 provide data, build `RootCauseAnalyzer` that ranks hypotheses by evidence.
+**Next Verifiable Step:** Complete DependsOn edges for full service→host→gateway chain; implement symptom grouping logic; fix failing tests.
 
 ---
 
@@ -341,19 +345,21 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 14: Capacity Planning
 
-**Global Status:** **Partial** (P4 - core planner implemented, scheduler integration complete)
+**Global Status:** **Partial** (P4 - core planner implemented, scheduler integration complete, **nominal_capacity config, timestamp-based regression, capacity_source tracking added**)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Traffic/utilization trends (linear/exp fit) | ✅ | `CapacityPlanner::perform_linear_regression()` in `capacity_planning.rs:249-345` |
+| Traffic/utilization trends (linear/exp fit) | ✅ | `CapacityPlanner::perform_linear_regression()` in `capacity_planning.rs:249-345` uses actual timestamps |
 | Saturation thresholds (80% interface, CPU, mem) | ⚠️ | `CapacityConfig.saturation_threshold_pct` exists (default 80%); only latency trends implemented, not interface/CPU/mem utilization |
-| Time-to-limit estimation with CI | ✅ | `TrendAnalysis.time_to_saturation` calculated in `capacity_planning.rs:305-314` |
+| Time-to-limit estimation with CI | ⚠️ | `TrendAnalysis.time_to_saturation` calculated; **confidence interval NOT implemented** (config `confidence_level` stored but unused for intervals) |
 | Bottleneck identification | ✅ | `CapacityReport.critical_resources` sorted by time to saturation in `capacity_planning.rs:204-214` |
-| Report (headroom, projected exhaustion) | ✅ | `CapacityReport::to_markdown()` and `to_json()` in `capacity_planning.rs:350-453` |
+| Report (headroom, projected exhaustion) | ✅ | `CapacityReport::to_markdown()` and `to_json()` in `capacity_planning.rs:350-453` includes capacity source, uncertainty disclaimer |
+| Nominal capacity config | ✅ | `CapacityConfig.nominal_capacity` option; fallback to max-observed proxy with `capacity_source` tracking |
+| Linear regression denominator check | ✅ | Handles identical timestamps (denominator ≈ 0) gracefully |
 
-**Tests:** Unit tests needed for linear regression and report generation.
+**Tests:** Unit tests needed for linear regression and report generation. New test file `tests/capacity_tests.rs` created (untracked).
 
-**Next Verifiable Step:** Add unit tests for `CapacityPlanner::analyze_capacity` and `TrendAnalysis`; integrate SNMP utilization data (Objective 5) for interface/CPU/memory trends.
+**Next Verifiable Step:** Add unit tests for `CapacityPlanner::analyze_capacity` and `TrendAnalysis`; implement confidence intervals for time-to-saturation; integrate SNMP utilization data (Objective 5) for interface/CPU/memory trends; add exponential fit alternative.
 
 ---
 

@@ -51,6 +51,8 @@ anomaly:
   enable_spike_detection: true
   enable_drift_detection: true
   enable_pattern_break_detection: false
+  anomaly_cooldown_seconds: 300
+  min_absolute_change: 10.0
 
 # SNMP credentials (use environment variables for secrets)
 # snmp_v3_users:

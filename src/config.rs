@@ -75,6 +75,8 @@ pub struct AnomalyConfig {
     pub enable_spike_detection: Option<bool>,
     pub enable_drift_detection: Option<bool>,
     pub enable_pattern_break_detection: Option<bool>,
+    pub anomaly_cooldown_seconds: Option<i64>,
+    pub min_absolute_change: Option<f64>,
 }
 
 impl Default for AnomalyConfig {
@@ -89,6 +91,8 @@ impl Default for AnomalyConfig {
             enable_spike_detection: Some(true),
             enable_drift_detection: Some(true),
             enable_pattern_break_detection: Some(false),
+            anomaly_cooldown_seconds: Some(300),
+            min_absolute_change: Some(10.0),
         }
     }
 }

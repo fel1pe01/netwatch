@@ -144,19 +144,24 @@ impl Storage {
             q = q.bind(arg);
         }
         let rows = q.fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(|r| {
-            ObservationRow {
-                id: r.get("id"),
-                device_id: r.get("device_id"),
-                metric: r.get("metric"),
-                value: r.get("value"),
-                source: r.get("source"),
-                confidence: r.get("confidence"),
-                observed_at: r.get("observed_at"),
-                created_at: r.get("created_at"),
-                updated_at: r.get("updated_at"),
-            }.into_observation().unwrap()
-        }).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                ObservationRow {
+                    id: r.get("id"),
+                    device_id: r.get("device_id"),
+                    metric: r.get("metric"),
+                    value: r.get("value"),
+                    source: r.get("source"),
+                    confidence: r.get("confidence"),
+                    observed_at: r.get("observed_at"),
+                    created_at: r.get("created_at"),
+                    updated_at: r.get("updated_at"),
+                }
+                .into_observation()
+                .unwrap()
+            })
+            .collect())
     }
 
     /// Compute percentile from observations (uses SQLite's percentile approximation via ORDER BY + LIMIT)

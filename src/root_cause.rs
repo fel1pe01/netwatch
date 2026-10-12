@@ -54,6 +54,13 @@ pub struct DependencyLink {
     pub confidence: f64,
 }
 
+impl Hypothesis {
+    /// Returns true if this hypothesis represents a root cause (no upstream dependencies)
+    pub fn is_root(&self) -> bool {
+        self.dependency_path.is_empty()
+    }
+}
+
 /// Root cause analyzer
 pub struct RootCauseAnalyzer {
     topology_store: Arc<TopologyStore>,
