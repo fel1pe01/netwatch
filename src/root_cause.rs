@@ -120,12 +120,12 @@ impl RootCauseAnalyzer {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<FailingObservation>> {
-        // Query observations table for failed checks
+        // Query observations table for failed checks (confidence = 'low' indicates failure)
         let rows = sqlx::query(
             r#"
             SELECT id, device_id, metric, value, source, confidence, observed_at, created_at, updated_at
             FROM observations
-            WHERE observed_at >= ? AND observed_at <= ? AND value = 0
+            WHERE observed_at >= ? AND observed_at <= ? AND confidence = 'low'
             ORDER BY observed_at DESC
             "#,
         )
