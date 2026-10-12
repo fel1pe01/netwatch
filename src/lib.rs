@@ -1,3 +1,5 @@
+#[path = "anomaly.rs"]
+pub mod anomaly;
 #[path = "api.rs"]
 pub mod api;
 #[path = "config.rs"]
@@ -22,6 +24,8 @@ pub mod metrics;
 mod metrics_handler_test;
 #[path = "monitoring/mod.rs"]
 pub mod monitoring;
+#[path = "root_cause.rs"]
+pub mod root_cause;
 #[path = "scheduler.rs"]
 pub mod scheduler;
 #[path = "snmp.rs"]

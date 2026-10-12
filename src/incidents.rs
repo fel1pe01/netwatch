@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
 use thiserror::Error;
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
@@ -143,6 +144,11 @@ pub struct Incident {
     pub transitions: Vec<IncidentTransition>,
     pub cooldown_until: Option<DateTime<Utc>>,
     pub silence_until: Option<DateTime<Utc>>,
+    // Root cause analysis fields (P4)
+    pub root_cause_hypothesis_id: Option<String>,
+    pub root_cause_confirmed: bool,
+    pub root_cause_confirmed_at: Option<DateTime<Utc>>,
+    pub root_cause_confirmed_by: Option<String>,
 }
 
 impl Incident {
@@ -181,6 +187,10 @@ impl Incident {
             transitions: vec![],
             cooldown_until: None,
             silence_until: None,
+            root_cause_hypothesis_id: None,
+            root_cause_confirmed: false,
+            root_cause_confirmed_at: None,
+            root_cause_confirmed_by: None,
         }
     }
 
@@ -292,6 +302,10 @@ struct IncidentRow {
     transitions: String,
     cooldown_until: Option<String>,
     silence_until: Option<String>,
+    root_cause_hypothesis_id: Option<String>,
+    root_cause_confirmed: bool,
+    root_cause_confirmed_at: Option<String>,
+    root_cause_confirmed_by: Option<String>,
 }
 
 impl IncidentRow {
@@ -341,6 +355,14 @@ impl IncidentRow {
                 .map(|s| s.parse())
                 .transpose()?,
             silence_until: self.silence_until.as_ref().map(|s| s.parse()).transpose()?,
+            root_cause_hypothesis_id: self.root_cause_hypothesis_id.clone(),
+            root_cause_confirmed: self.root_cause_confirmed,
+            root_cause_confirmed_at: self
+                .root_cause_confirmed_at
+                .as_ref()
+                .map(|s| s.parse())
+                .transpose()?,
+            root_cause_confirmed_by: self.root_cause_confirmed_by.clone(),
         })
     }
 }
@@ -367,8 +389,9 @@ impl IncidentStore {
                 id, dedup_key, correlation_id, entity_id, entity_type, severity, state,
                 title, description, evidence, labels, created_at, updated_at,
                 acknowledged_at, acknowledged_by, resolved_at, resolved_by, closed_at,
-                transitions, cooldown_until, silence_until
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                transitions, cooldown_until, silence_until,
+                root_cause_hypothesis_id, root_cause_confirmed, root_cause_confirmed_at, root_cause_confirmed_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&incident.id)
@@ -392,6 +415,10 @@ impl IncidentStore {
         .bind(&transitions_json)
         .bind(incident.cooldown_until.map(|dt| dt.to_rfc3339()))
         .bind(incident.silence_until.map(|dt| dt.to_rfc3339()))
+        .bind(&incident.root_cause_hypothesis_id)
+        .bind(incident.root_cause_confirmed)
+        .bind(incident.root_cause_confirmed_at.map(|dt| dt.to_rfc3339()))
+        .bind(&incident.root_cause_confirmed_by)
         .execute(&self.pool)
         .await?;
 
@@ -434,7 +461,8 @@ impl IncidentStore {
                 correlation_id = ?, entity_id = ?, entity_type = ?, severity = ?, state = ?,
                 title = ?, description = ?, evidence = ?, labels = ?, updated_at = ?,
                 acknowledged_at = ?, acknowledged_by = ?, resolved_at = ?, resolved_by = ?,
-                closed_at = ?, transitions = ?, cooldown_until = ?, silence_until = ?
+                closed_at = ?, transitions = ?, cooldown_until = ?, silence_until = ?,
+                root_cause_hypothesis_id = ?, root_cause_confirmed = ?, root_cause_confirmed_at = ?, root_cause_confirmed_by = ?
             WHERE id = ?
             "#,
         )
@@ -456,6 +484,10 @@ impl IncidentStore {
         .bind(&transitions_json)
         .bind(incident.cooldown_until.map(|dt| dt.to_rfc3339()))
         .bind(incident.silence_until.map(|dt| dt.to_rfc3339()))
+        .bind(&incident.root_cause_hypothesis_id)
+        .bind(incident.root_cause_confirmed)
+        .bind(incident.root_cause_confirmed_at.map(|dt| dt.to_rfc3339()))
+        .bind(&incident.root_cause_confirmed_by)
         .bind(&incident.id)
         .execute(&self.pool)
         .await?;
@@ -471,5 +503,158 @@ impl IncidentStore {
         .await?;
 
         rows.into_iter().map(|r| r.to_incident()).collect()
+    }
+
+    pub async fn find_by_hypothesis_id(
+        &self,
+        hypothesis_id: &str,
+    ) -> Result<Option<Incident>, IncidentError> {
+        let row = sqlx::query_as::<_, IncidentRow>(
+            "SELECT * FROM incidents WHERE root_cause_hypothesis_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(hypothesis_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(|r| r.to_incident()).transpose()
+    }
+}
+
+/// Confirm or reject a root cause hypothesis for an incident
+pub async fn confirm_root_cause(
+    store: &IncidentStore,
+    incident_id: &str,
+    hypothesis_id: &str,
+    confirmed: bool,
+    actor: String,
+) -> Result<(), IncidentError> {
+    let mut incident = store
+        .find_by_id(incident_id)
+        .await?
+        .ok_or_else(|| IncidentError::NotFound(incident_id.to_string()))?;
+
+    incident.root_cause_hypothesis_id = Some(hypothesis_id.to_string());
+    incident.root_cause_confirmed = confirmed;
+    incident.root_cause_confirmed_at = Some(Utc::now());
+    incident.root_cause_confirmed_by = Some(actor);
+
+    store.update(&incident).await?;
+    Ok(())
+}
+
+/// Incident Engine - consumes events from EventBus and manages incident lifecycle
+pub struct IncidentEngine {
+    store: IncidentStore,
+    event_bus: broadcast::Receiver<crate::events::Event>,
+    cooldown_seconds: u64,
+}
+
+impl IncidentEngine {
+    pub fn new(
+        store: IncidentStore,
+        event_bus: broadcast::Receiver<crate::events::Event>,
+        cooldown_seconds: u64,
+    ) -> Self {
+        Self {
+            store,
+            event_bus,
+            cooldown_seconds,
+        }
+    }
+
+    pub async fn run(mut self) -> Result<()> {
+        while let Ok(event) = self.event_bus.recv().await {
+            if let Err(e) = self.process_event(event).await {
+                tracing::error!("Incident engine error processing event: {}", e);
+            }
+        }
+        Ok(())
+    }
+
+    async fn process_event(&mut self, event: crate::events::Event) -> Result<()> {
+        use crate::events::EventType;
+
+        match event.event_type {
+            EventType::CheckFailed | EventType::ThresholdBreached => {
+                self.handle_firing_event(event).await
+            }
+            EventType::CheckCompleted | EventType::ThresholdRecovered => {
+                self.handle_recovery_event(event).await
+            }
+            _ => Ok(()),
+        }
+    }
+
+    async fn handle_firing_event(&mut self, event: crate::events::Event) -> Result<()> {
+        use crate::events::{EventType, Severity};
+
+        // Check cooldown
+        if let Some(mut existing) = self.store.find_by_dedup_key(&event.dedup_key).await? {
+            if existing.is_in_cooldown() {
+                return Ok(());
+            }
+            if existing.is_silenced() {
+                return Ok(());
+            }
+            // Update existing incident with new evidence
+            existing
+                .evidence
+                .push(serde_json::to_value(&event.evidence)?);
+            existing.updated_at = Utc::now();
+            existing.set_cooldown(self.cooldown_seconds);
+            self.store.update(&existing).await?;
+            return Ok(());
+        }
+
+        // Determine severity from event
+        let severity = match event.severity {
+            Severity::Info => IncidentSeverity::Info,
+            Severity::Warning => IncidentSeverity::Warning,
+            Severity::Critical => IncidentSeverity::Critical,
+        };
+
+        // Create new incident
+        let title = match event.event_type {
+            EventType::CheckFailed => format!("Check failed: {}", event.entity_id),
+            EventType::ThresholdBreached => {
+                if let Some(th) = &event.evidence.threshold {
+                    format!(
+                        "Threshold breached: {} {} {}",
+                        th.metric, th.operator, th.threshold
+                    )
+                } else {
+                    format!("Threshold breached: {}", event.entity_id)
+                }
+            }
+            _ => format!("Event: {}", event.entity_id),
+        };
+
+        let mut incident = Incident::new(
+            event.dedup_key.clone(),
+            event.entity_id.clone(),
+            format!("{:?}", event.entity_type),
+            severity,
+            title,
+            Some(format!("{:?}", event.event_type)),
+            vec![serde_json::to_value(&event.evidence)?],
+            HashMap::new(),
+            event.correlation_id.clone(),
+        );
+        incident.set_cooldown(self.cooldown_seconds);
+
+        self.store.create(&incident).await?;
+        Ok(())
+    }
+
+    async fn handle_recovery_event(&mut self, event: crate::events::Event) -> Result<()> {
+        if let Some(mut existing) = self.store.find_by_dedup_key(&event.dedup_key).await? {
+            if existing.state == IncidentState::Open
+                || existing.state == IncidentState::Acknowledged
+            {
+                existing.resolve("auto".to_string(), Some("Condition recovered".to_string()))?;
+                self.store.update(&existing).await?;
+            }
+        }
+        Ok(())
     }
 }

@@ -3,6 +3,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::discovery::interfaces::discover_interfaces;
@@ -12,17 +13,18 @@ use crate::topology::{
     TopologyNodeType, TopologySnapshot,
 };
 use crate::topology_store::TopologyStore;
+use futures::executor::block_on;
 
 pub struct TopologyBuilder {
     store: Arc<TopologyStore>,
-    graph: TopologyGraph,
+    graph: Arc<Mutex<TopologyGraph>>,
 }
 
 impl Clone for TopologyBuilder {
     fn clone(&self) -> Self {
         Self {
             store: Arc::clone(&self.store),
-            graph: self.graph.clone(),
+            graph: Arc::clone(&self.graph),
         }
     }
 }
@@ -31,11 +33,16 @@ impl TopologyBuilder {
     pub fn new(store: Arc<TopologyStore>) -> Self {
         Self {
             store,
-            graph: TopologyGraph::new(),
+            graph: Arc::new(Mutex::new(TopologyGraph::new())),
         }
     }
 
-    pub async fn build_from_discovery(&mut self) -> Result<TopologySnapshot> {
+    /// Helper to lock graph for sync methods
+    fn graph_lock(&self) -> tokio::sync::MutexGuard<'_, TopologyGraph> {
+        block_on(self.graph.lock())
+    }
+
+    pub async fn build_from_discovery(&self) -> Result<TopologySnapshot> {
         // Load existing graph from storage
         self.load_from_storage().await?;
 
@@ -51,14 +58,11 @@ impl TopologyBuilder {
         self.persist_all().await?;
 
         // Create and return snapshot
-        let snapshot = self.graph.to_snapshot();
+        let snapshot = self.graph_lock().to_snapshot();
         Ok(snapshot)
     }
 
-    pub async fn build_from_snmp(
-        &mut self,
-        snmp_data: &[SnmpDeviceData],
-    ) -> Result<TopologySnapshot> {
+    pub async fn build_from_snmp(&self, snmp_data: &[SnmpDeviceData]) -> Result<TopologySnapshot> {
         // Load existing graph from storage
         self.load_from_storage().await?;
 
@@ -68,25 +72,26 @@ impl TopologyBuilder {
         // Persist all changes
         self.persist_all().await?;
 
-        let snapshot = self.graph.to_snapshot();
+        let snapshot = self.graph_lock().to_snapshot();
         Ok(snapshot)
     }
 
-    async fn load_from_storage(&mut self) -> Result<()> {
+    async fn load_from_storage(&self) -> Result<()> {
         let nodes = self.store.list_nodes().await?;
         let edges = self.store.list_edges().await?;
 
+        let mut graph = self.graph_lock();
         for node in nodes {
-            self.graph.add_node(node);
+            graph.add_node(node);
         }
         for edge in edges {
-            self.graph.add_edge(edge)?;
+            graph.add_edge(edge)?;
         }
         Ok(())
     }
 
     async fn process_interfaces(
-        &mut self,
+        &self,
         interfaces: &[crate::discovery::interfaces::LocalInterface],
     ) -> Result<()> {
         for iface in interfaces {
@@ -158,22 +163,25 @@ impl TopologyBuilder {
             };
 
             // Add nodes to graph
-            self.graph.add_node(device_node);
-            self.graph.add_node(iface_node);
+            {
+                let mut graph = self.graph_lock();
+                graph.add_node(device_node);
+                graph.add_node(iface_node);
 
-            // Add contains edge: device contains interface
-            let contains_edge = TopologyEdge {
-                id: Uuid::new_v4().to_string(),
-                source: device_id,
-                target: iface_id.clone(),
-                edge_type: crate::topology::TopologyEdgeType::Contains,
-                provenance: Provenance::Discovery,
-                confidence: 1.0,
-                observed_at: Utc::now(),
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            };
-            self.graph.add_edge(contains_edge)?;
+                // Add contains edge: device contains interface
+                let contains_edge = TopologyEdge {
+                    id: Uuid::new_v4().to_string(),
+                    source: device_id,
+                    target: iface_id.clone(),
+                    edge_type: crate::topology::TopologyEdgeType::Contains,
+                    provenance: Provenance::Discovery,
+                    confidence: 1.0,
+                    observed_at: Utc::now(),
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                };
+                graph.add_edge(contains_edge)?;
+            }
 
             // Process IPs - create subnet nodes
             self.process_interface_ips(&iface_id, iface).await?;
@@ -182,7 +190,7 @@ impl TopologyBuilder {
     }
 
     async fn process_interface_ips(
-        &mut self,
+        &self,
         iface_id: &str,
         iface: &crate::discovery::interfaces::LocalInterface,
     ) -> Result<()> {
@@ -215,21 +223,24 @@ impl TopologyBuilder {
                     updated_at: Utc::now(),
                 };
 
-                self.graph.add_node(subnet_node);
+                {
+                    let mut graph = self.graph_lock();
+                    graph.add_node(subnet_node);
 
-                // Add edge: interface connected to subnet
-                let edge = TopologyEdge {
-                    id: Uuid::new_v4().to_string(),
-                    source: iface_id.to_string(),
-                    target: subnet_id,
-                    edge_type: crate::topology::TopologyEdgeType::ConnectedTo,
-                    provenance: Provenance::Discovery,
-                    confidence: 0.9,
-                    observed_at: Utc::now(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                };
-                self.graph.add_edge(edge)?;
+                    // Add edge: interface connected to subnet
+                    let edge = TopologyEdge {
+                        id: Uuid::new_v4().to_string(),
+                        source: iface_id.to_string(),
+                        target: subnet_id,
+                        edge_type: crate::topology::TopologyEdgeType::ConnectedTo,
+                        provenance: Provenance::Discovery,
+                        confidence: 0.9,
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    };
+                    graph.add_edge(edge)?;
+                }
             }
         }
 
@@ -262,30 +273,30 @@ impl TopologyBuilder {
                     updated_at: Utc::now(),
                 };
 
-                self.graph.add_node(subnet_node);
+                {
+                    let mut graph = self.graph_lock();
+                    graph.add_node(subnet_node);
 
-                // Add edge: interface connected to subnet
-                let edge = TopologyEdge {
-                    id: Uuid::new_v4().to_string(),
-                    source: iface_id.to_string(),
-                    target: subnet_id,
-                    edge_type: crate::topology::TopologyEdgeType::ConnectedTo,
-                    provenance: Provenance::Discovery,
-                    confidence: 0.9,
-                    observed_at: Utc::now(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                };
-                self.graph.add_edge(edge)?;
+                    // Add edge: interface connected to subnet
+                    let edge = TopologyEdge {
+                        id: Uuid::new_v4().to_string(),
+                        source: iface_id.to_string(),
+                        target: subnet_id,
+                        edge_type: crate::topology::TopologyEdgeType::ConnectedTo,
+                        provenance: Provenance::Discovery,
+                        confidence: 0.9,
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    };
+                    graph.add_edge(edge)?;
+                }
             }
         }
         Ok(())
     }
 
-    async fn process_routes(
-        &mut self,
-        routes: &[crate::discovery::routing::RouteEntry],
-    ) -> Result<()> {
+    async fn process_routes(&self, routes: &[crate::discovery::routing::RouteEntry]) -> Result<()> {
         for route in routes {
             // Skip default route for now
             if route.destination == "0.0.0.0" || route.destination == "::" {
@@ -318,30 +329,34 @@ impl TopologyBuilder {
                     created_at: Utc::now(),
                     updated_at: Utc::now(),
                 };
-                self.graph.add_node(gateway_node);
 
-                // Find interface node
-                let iface_id = format!("iface-{}", route.interface);
+                {
+                    let mut graph = self.graph_lock();
+                    graph.add_node(gateway_node);
 
-                // Add edge: interface routes through gateway
-                let edge = crate::topology::TopologyEdge {
-                    id: Uuid::new_v4().to_string(),
-                    source: iface_id,
-                    target: gateway_id,
-                    edge_type: crate::topology::TopologyEdgeType::RoutesThrough,
-                    provenance: Provenance::RoutingTable,
-                    confidence: 0.95,
-                    observed_at: Utc::now(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                };
-                self.graph.add_edge(edge)?;
+                    // Find interface node
+                    let iface_id = format!("iface-{}", route.interface);
+
+                    // Add edge: interface routes through gateway
+                    let edge = crate::topology::TopologyEdge {
+                        id: Uuid::new_v4().to_string(),
+                        source: iface_id,
+                        target: gateway_id,
+                        edge_type: crate::topology::TopologyEdgeType::RoutesThrough,
+                        provenance: Provenance::RoutingTable,
+                        confidence: 0.95,
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    };
+                    graph.add_edge(edge)?;
+                }
             }
         }
         Ok(())
     }
 
-    async fn process_snmp_devices(&mut self, snmp_data: &[SnmpDeviceData]) -> Result<()> {
+    async fn process_snmp_devices(&self, snmp_data: &[SnmpDeviceData]) -> Result<()> {
         for device in snmp_data {
             let device_id = format!("device-{}", device.address);
 
@@ -389,110 +404,117 @@ impl TopologyBuilder {
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
             };
-            self.graph.add_node(device_node);
 
-            // Add interfaces from SNMP
-            for iface in &device.interfaces {
-                let iface_id = format!("iface-{}-{}", device.address, iface.if_index);
+            {
+                let mut graph = self.graph_lock();
+                graph.add_node(device_node);
 
-                let iface_node = crate::topology::TopologyNode {
-                    id: iface_id.clone(),
-                    node_type: crate::topology::TopologyNodeType::Interface,
-                    label: iface
-                        .if_name
-                        .clone()
-                        .unwrap_or_else(|| format!("if{}", iface.if_index)),
-                    properties: {
-                        let mut props = HashMap::new();
-                        props.insert(
-                            "if_descr".to_string(),
-                            serde_json::Value::String(iface.if_descr.clone()),
-                        );
-                        props.insert(
-                            "if_type".to_string(),
-                            serde_json::Value::Number(iface.if_type.into()),
-                        );
-                        props.insert(
-                            "if_mtu".to_string(),
-                            serde_json::Value::Number(iface.if_mtu.into()),
-                        );
-                        props.insert(
-                            "if_speed".to_string(),
-                            serde_json::Value::Number(iface.if_speed.into()),
-                        );
-                        props.insert(
-                            "if_admin_status".to_string(),
-                            serde_json::Value::Number(iface.if_admin_status.into()),
-                        );
-                        props.insert(
-                            "if_oper_status".to_string(),
-                            serde_json::Value::Number(iface.if_oper_status.into()),
-                        );
-                        props.insert(
-                            "if_high_speed".to_string(),
-                            iface
-                                .if_high_speed
-                                .map(|v| serde_json::Value::Number(v.into()))
-                                .unwrap_or(serde_json::Value::Null),
-                        );
-                        props.insert(
-                            "evidence".to_string(),
-                            serde_json::Value::String("snmp".to_string()),
-                        );
-                        props
-                    },
-                    state: match iface.if_oper_status {
-                        1 => NodeState::Online,   // up
-                        2 => NodeState::Offline,  // down
-                        3 => NodeState::Degraded, // testing
-                        _ => NodeState::Unknown,
-                    },
-                    observed_at: Utc::now(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                };
-                self.graph.add_node(iface_node);
+                // Add interfaces from SNMP
+                for iface in &device.interfaces {
+                    let iface_id = format!("iface-{}-{}", device.address, iface.if_index);
 
-                // Add contains edge: device contains interface
-                let contains_edge = crate::topology::TopologyEdge {
-                    id: Uuid::new_v4().to_string(),
-                    source: device_id.clone(),
-                    target: iface_id.clone(),
-                    edge_type: crate::topology::TopologyEdgeType::Contains,
-                    provenance: Provenance::Snmp,
-                    confidence: 1.0,
-                    observed_at: Utc::now(),
-                    created_at: Utc::now(),
-                    updated_at: Utc::now(),
-                };
-                self.graph.add_edge(contains_edge)?;
+                    let iface_node = crate::topology::TopologyNode {
+                        id: iface_id.clone(),
+                        node_type: crate::topology::TopologyNodeType::Interface,
+                        label: iface
+                            .if_name
+                            .clone()
+                            .unwrap_or_else(|| format!("if{}", iface.if_index)),
+                        properties: {
+                            let mut props = HashMap::new();
+                            props.insert(
+                                "if_descr".to_string(),
+                                serde_json::Value::String(iface.if_descr.clone()),
+                            );
+                            props.insert(
+                                "if_type".to_string(),
+                                serde_json::Value::Number(iface.if_type.into()),
+                            );
+                            props.insert(
+                                "if_mtu".to_string(),
+                                serde_json::Value::Number(iface.if_mtu.into()),
+                            );
+                            props.insert(
+                                "if_speed".to_string(),
+                                serde_json::Value::Number(iface.if_speed.into()),
+                            );
+                            props.insert(
+                                "if_admin_status".to_string(),
+                                serde_json::Value::Number(iface.if_admin_status.into()),
+                            );
+                            props.insert(
+                                "if_oper_status".to_string(),
+                                serde_json::Value::Number(iface.if_oper_status.into()),
+                            );
+                            props.insert(
+                                "if_high_speed".to_string(),
+                                iface
+                                    .if_high_speed
+                                    .map(|v| serde_json::Value::Number(v.into()))
+                                    .unwrap_or(serde_json::Value::Null),
+                            );
+                            props.insert(
+                                "evidence".to_string(),
+                                serde_json::Value::String("snmp".to_string()),
+                            );
+                            props
+                        },
+                        state: match iface.if_oper_status {
+                            1 => NodeState::Online,   // up
+                            2 => NodeState::Offline,  // down
+                            3 => NodeState::Degraded, // testing
+                            _ => NodeState::Unknown,
+                        },
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    };
+                    graph.add_node(iface_node);
+
+                    // Add contains edge: device contains interface
+                    let contains_edge = crate::topology::TopologyEdge {
+                        id: Uuid::new_v4().to_string(),
+                        source: device_id.clone(),
+                        target: iface_id.clone(),
+                        edge_type: crate::topology::TopologyEdgeType::Contains,
+                        provenance: Provenance::Snmp,
+                        confidence: 1.0,
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    };
+                    graph.add_edge(contains_edge)?;
+                }
             }
         }
         Ok(())
     }
 
-    async fn persist_all(&mut self) -> Result<()> {
+    async fn persist_all(&self) -> Result<()> {
         // Persist nodes
-        for node in self.graph.nodes() {
-            self.store.upsert_node(node).await?;
-        }
+        {
+            let graph = self.graph_lock();
+            for node in graph.nodes() {
+                self.store.upsert_node(node).await?;
+            }
 
-        // Persist edges
-        for edge in self.graph.edges() {
-            self.store.upsert_edge(edge).await?;
+            // Persist edges
+            for edge in graph.edges() {
+                self.store.upsert_edge(edge).await?;
+            }
         }
         Ok(())
     }
 
     // Create and persist a snapshot
-    pub async fn create_snapshot(&mut self) -> Result<TopologySnapshot> {
-        let snapshot = self.graph.to_snapshot();
+    pub async fn create_snapshot(&self) -> Result<TopologySnapshot> {
+        let snapshot = self.graph_lock().to_snapshot();
         self.store.create_snapshot(&snapshot).await?;
         Ok(snapshot)
     }
 
     // Compare with another snapshot
-    pub async fn diff_with_latest(&mut self) -> Result<TopologyDiff> {
+    pub async fn diff_with_latest(&self) -> Result<TopologyDiff> {
         if let Some(latest_snapshot) = self.store.get_latest_snapshot().await? {
             // Reconstruct graph from snapshot
             let mut other_graph = TopologyGraph::new();
@@ -503,14 +525,14 @@ impl TopologyBuilder {
                 other_graph.add_edge(edge.clone())?;
             }
 
-            let diff = self.graph.diff(&other_graph);
+            let diff = self.graph_lock().diff(&other_graph);
             Ok(diff)
         } else {
             // No previous snapshot
             let diff = crate::topology::TopologyDiff {
-                added_nodes: self.graph.nodes().into_iter().cloned().collect(),
+                added_nodes: self.graph_lock().nodes().into_iter().cloned().collect(),
                 removed_nodes: Vec::new(),
-                added_edges: self.graph.edges().into_iter().cloned().collect(),
+                added_edges: self.graph_lock().edges().into_iter().cloned().collect(),
                 removed_edges: Vec::new(),
                 changed_nodes: Vec::new(),
                 changed_edges: Vec::new(),
@@ -524,12 +546,13 @@ impl TopologyBuilder {
         let mut output = String::from("graph TD\n");
 
         // Add nodes
-        for node in self.graph.nodes() {
+        for node in self.graph_lock().nodes() {
             let _shape = match node.node_type {
                 crate::topology::TopologyNodeType::Device => "box",
                 crate::topology::TopologyNodeType::Interface => "circle",
                 crate::topology::TopologyNodeType::Subnet => "hexagon",
                 crate::topology::TopologyNodeType::Gateway => "diamond",
+                crate::topology::TopologyNodeType::Service => "ellipse",
             };
             let color = match node.state {
                 NodeState::Online => "#22c55e",
@@ -551,7 +574,7 @@ impl TopologyBuilder {
         }
 
         // Add edges
-        for edge in self.graph.edges() {
+        for edge in self.graph_lock().edges() {
             let edge_line = format!(
                 "    {} -->|{}| {}\n",
                 edge.source.replace('-', "_"),
@@ -570,12 +593,13 @@ impl TopologyBuilder {
             String::from("digraph topology {\n    rankdir=LR;\n    node [fontname=\"Arial\"];\n");
 
         // Add nodes
-        for node in self.graph.nodes() {
+        for node in self.graph_lock().nodes() {
             let shape = match node.node_type {
                 crate::topology::TopologyNodeType::Device => "box",
                 crate::topology::TopologyNodeType::Interface => "circle",
                 crate::topology::TopologyNodeType::Subnet => "hexagon",
                 crate::topology::TopologyNodeType::Gateway => "diamond",
+                crate::topology::TopologyNodeType::Service => "ellipse",
             };
             let color = match node.state {
                 NodeState::Online => "green",
@@ -590,7 +614,7 @@ impl TopologyBuilder {
         }
 
         // Add edges
-        for edge in self.graph.edges() {
+        for edge in self.graph_lock().edges() {
             output.push_str(&format!(
                 "    \"{}\" -> \"{}\" [label=\"{}\", color=blue];\n",
                 edge.source, edge.target, edge.edge_type
@@ -603,8 +627,69 @@ impl TopologyBuilder {
 
     // Export to JSON
     pub fn export_json(&self) -> Result<String> {
-        let snapshot = self.graph.to_snapshot();
+        let snapshot = self.graph_lock().to_snapshot();
         Ok(serde_json::to_string_pretty(&snapshot)?)
+    }
+
+    /// Add or update a service node and its dependency on a device/gateway
+    /// This creates a service node and a DependsOn edge from service to the entity it depends on
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_service_dependency(
+        &mut self,
+        service_id: &str,
+        service_label: &str,
+        service_type: &str,
+        depends_on_id: &str,
+        state: NodeState,
+        protocol: &str,
+        port: Option<u16>,
+    ) -> Result<()> {
+        // Create or update service node
+        let mut props = HashMap::new();
+        props.insert(
+            "service_type".to_string(),
+            serde_json::Value::String(service_type.to_string()),
+        );
+        props.insert(
+            "protocol".to_string(),
+            serde_json::Value::String(protocol.to_string()),
+        );
+        if let Some(port) = port {
+            props.insert("port".to_string(), serde_json::Value::Number(port.into()));
+        }
+        props.insert(
+            "evidence".to_string(),
+            serde_json::Value::String("health_check".to_string()),
+        );
+
+        let service_node = TopologyNode {
+            id: service_id.to_string(),
+            node_type: TopologyNodeType::Service,
+            label: service_label.to_string(),
+            properties: props,
+            state,
+            observed_at: Utc::now(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+
+        self.graph_lock().add_node(service_node);
+
+        // Add DependsOn edge: service -> depends_on_id (device/gateway)
+        let edge = TopologyEdge {
+            id: Uuid::new_v4().to_string(),
+            source: service_id.to_string(),
+            target: depends_on_id.to_string(),
+            edge_type: crate::topology::TopologyEdgeType::DependsOn,
+            provenance: Provenance::Discovery,
+            confidence: 0.9,
+            observed_at: Utc::now(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        self.graph_lock().add_edge(edge)?;
+
+        Ok(())
     }
 }
 

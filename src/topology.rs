@@ -12,6 +12,7 @@ pub enum TopologyNodeType {
     Interface,
     Subnet,
     Gateway,
+    Service,
 }
 
 impl std::fmt::Display for TopologyNodeType {
@@ -21,6 +22,7 @@ impl std::fmt::Display for TopologyNodeType {
             TopologyNodeType::Interface => write!(f, "interface"),
             TopologyNodeType::Subnet => write!(f, "subnet"),
             TopologyNodeType::Gateway => write!(f, "gateway"),
+            TopologyNodeType::Service => write!(f, "service"),
         }
     }
 }
@@ -34,6 +36,7 @@ impl std::str::FromStr for TopologyNodeType {
             "interface" => Ok(TopologyNodeType::Interface),
             "subnet" => Ok(TopologyNodeType::Subnet),
             "gateway" => Ok(TopologyNodeType::Gateway),
+            "service" => Ok(TopologyNodeType::Service),
             _ => Err(()),
         }
     }

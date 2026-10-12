@@ -1,15 +1,20 @@
 # Changes Made During Implementation
 
 **Date:** 2026-10-11
-**Implementation Session:** Phase 1-2: Repository inspection, documentation reconciliation before P4
+**Implementation Session:** Phase 1-3: Repository inspection, documentation reconciliation, and prerequisite fixes for P4
 
 ---
 
 ## Summary
 
-This implementation performed a complete inspection of the netwatch repository state, identified significant discrepancies between documentation and actual implementation, and updated all Markdown documentation to accurately reflect the current state before beginning P4 (Intelligence & Capacity) work.
+This implementation performed a complete inspection of the netwatch repository state, identified significant discrepancies between documentation and actual implementation, updated all Markdown documentation to accurately reflect the current state, and implemented critical prerequisite fixes for P4 (Intelligence & Capacity).
 
-**Key Finding:** The codebase is significantly more advanced than the documentation indicated. P0 is fully complete with config, storage, scheduler, and persistence all wired and working. P1-P3 have substantial implementation progress that was not reflected in the docs.
+**Key Finding:** The codebase was significantly more advanced than the documentation indicated. P0 is fully complete with config, storage, scheduler, and persistence all wired and working. P1-P3 have substantial implementation progress that was not reflected in the docs.
+
+**Prerequisite Fixes for P4:**
+1. **Objective 1 percentile queries** - Added `compute_percentile`, `get_latency_observations`, `get_availability_stats` to storage
+2. **EventBus → IncidentEngine wiring** - Implemented `IncidentEngine` that consumes events and manages incident lifecycle
+3. **Service model and DependsOn edges** - Added `Service` node type, `add_service_dependency` method, and wired into health check jobs
 
 ---
 
@@ -85,15 +90,160 @@ This implementation performed a complete inspection of the netwatch repository s
 - Updated E2E smoke test description: 42 checks including drift and topology
 - Added Configuration section with config.example.yaml reference
 
-### 6. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — NOTE: NOT YET UPDATED
+### 6. `docs/ARCHITECTURE_AND_FUNCTIONAL_TESTS.md` — Complete Overhaul
 
-**Status:** Pending
+**Status:** Updated
 **Category:** Documentation
-**Note:** This file contains the detailed functional audit from the previous session. It still claims Config/Storage/Scheduler/EventBus are "NOT WIRED/NOT USED" which is now incorrect. This file needs to be updated to reflect the current wired state, or marked as historical audit.
+**Changes:**
+- Updated all component statuses to reflect actual wired state
+- Added Service node type, DependsOn edges, IncidentEngine
+- Updated execution flows with Scheduled Monitoring flow
+- Added Service dependency tracking in health check jobs
+- Updated test audit table with 36 tests (was 25)
+- Added Service model tests, IncidentEngine tests
+- Updated limitations table: removed fixed items, added current gaps
+
+### 7. `docs/CHANGES_MADE.md` — This File
+
+**Status:** Updated
+**Category:** Documentation
 
 ---
 
-## Verification Results After Documentation Update
+## Production Code Changes
+
+### 1. `src/storage.rs` — Added Percentile and Availability Queries
+
+**Status:** Modified
+**Category:** Production code (P4 prerequisite)
+**Changes:**
+- Added `insert_observation` method for typed observation insertion
+- Added `get_observations` with filtering by device, metric, time window
+- Added `get_latency_observations` for percentile computation
+- Added `compute_percentile` using sorted values (p50/p95/p99)
+- Added `get_availability_stats` computing successful/total ratio
+- Added `get_observation_count` for sample size checks
+- Added `Observation`, `AvailabilityStats`, `PercentileResult` structs
+- Changed migration runner to use file-based `Migrator` for dynamic migration discovery
+
+**Impact/Compatibility:**
+- Enables Objective 1 SLO calculations and Objective 7 baseline computation
+- Enables Objective 14 trend analysis
+- No breaking changes to public API
+
+**Validation:** `cargo test`, all integration tests pass
+
+---
+
+### 2. `src/incidents.rs` — Implemented IncidentEngine
+
+**Status:** Modified
+**Category:** Production code (P4 prerequisite)
+**Changes:**
+- Added `root_cause_hypothesis_id`, `root_cause_confirmed`, `root_cause_confirmed_at`, `root_cause_confirmed_by` fields to `Incident`
+- Added `confirm_root_cause` function for operator hypothesis confirmation
+- Implemented `IncidentEngine` struct that consumes events from EventBus
+- `IncidentEngine::run()` processes CheckFailed/ThresholdBreached → creates/updates incidents
+- `IncidentEngine::run()` processes CheckCompleted/ThresholdRecovered → auto-resolves incidents
+- Cooldown and silence handling integrated
+- Deduplication via dedup_key
+- 5-minute default cooldown
+
+**Impact/Compatibility:**
+- Enables Objective 3 alerting and incident management
+- Enables Objective 7 anomaly→incident correlation
+- Enables Objective 10 root cause hypothesis storage
+- No breaking changes; extends existing Incident model
+
+**Validation:** `cargo test`, compiles and integrates with EventBus
+
+---
+
+### 3. `src/main.rs` — Wired IncidentEngine and Service Dependencies
+
+**Status:** Modified
+**Category:** Production code (P4 prerequisite)
+**Changes:**
+- Added `IncidentEngine` initialization and background task in `main()`
+- Created separate `Arc<Mutex<TopologyBuilder>>` for health check jobs
+- Discovery job uses original `TopologyBuilder` (non-mutex)
+- Health check jobs (ICMP, HTTP, DNS, TLS) now call `add_service_dependency` on mutex-wrapped builder
+- Each health check creates/updates a Service node with DependsOn edge to the device it depends on
+- Service nodes track protocol, port, and state (Online/Offline based on check result)
+
+**Impact/Compatibility:**
+- Enables Objective 10 dependency graph (service → device → gateway)
+- Enables Objective 7 service-level baselines
+- No breaking changes; adds new topology data
+
+**Validation:** `cargo test`, e2e smoke test (42/42 pass)
+
+---
+
+### 4. `src/topology.rs` — Added Service Node Type
+
+**Status:** Modified
+**Category:** Production code (P4 prerequisite)
+**Changes:**
+- Added `Service` variant to `TopologyNodeType` enum
+- Updated `Display` and `FromStr` implementations
+
+**Impact/Compatibility:**
+- Enables Service nodes in topology graph
+- No breaking changes
+
+**Validation:** `cargo test`, topology exports include Service nodes
+
+---
+
+### 5. `src/topology_builder.rs` — Added Service Dependency Tracking
+
+**Status:** Modified
+**Category:** Production code (P4 prerequisite)
+**Changes:**
+- Added `add_service_dependency` method to create/update Service nodes and DependsOn edges
+- Updated `export_mermaid` and `export_dot` to handle Service node type (ellipse shape)
+- Method takes &mut self (called from within Mutex lock in main.rs)
+
+**Impact/Compatibility:**
+- Health check jobs can now populate service dependency graph
+- Topology exports include service nodes and dependencies
+- No breaking changes to existing topology building
+
+**Validation:** `cargo test`, topology exports include service nodes
+
+---
+
+### 6. `migrations/20241009000001_incidents.sql` — New Incidents Table
+
+**Status:** Added
+**Category:** Database migration
+**Changes:**
+- Created `incidents` table with all fields including root cause hypothesis fields
+- Indexes on dedup_key, entity, state, hypothesis_id
+
+**Impact/Compatibility:**
+- Required for IncidentEngine persistence
+- Forward-compatible migration (additive only)
+
+**Validation:** `cargo test test_storage_init` passes
+
+---
+
+### 7. `migrations/20251011000000_root_cause.sql` — Root Cause Index
+
+**Status:** Added
+**Category:** Database migration
+**Changes:**
+- Added index on `root_cause_hypothesis_id` (columns already exist in incidents table)
+
+**Impact/Compatibility:**
+- Supports efficient hypothesis lookup for Objective 10
+- No schema changes, index only
+
+---
+
+## Verification Results After All Changes
 
 | Command | Result |
 |---------|--------|
@@ -104,7 +254,7 @@ This implementation performed a complete inspection of the netwatch repository s
 | `cargo build --release` | PASS |
 | `scripts/e2e_smoke.sh` | PASS (42/42) |
 
-All validation commands pass, confirming the implementation is solid and only documentation needed correction.
+All validation commands pass, confirming the implementation is solid.
 
 ---
 
@@ -112,11 +262,11 @@ All validation commands pass, confirming the implementation is solid and only do
 
 | Document | Previous Claim | Actual State | Resolution |
 |----------|---------------|--------------|------------|
-| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Config NOT WIRED | Config loaded from file + env in main.rs | Updated ARCHITECTURE.md, IMPLEMENTATION_STATUS.md, ROADMAP.md |
-| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Storage NOT WIRED | Storage::connect() in main.rs, devices_handler queries DB | Updated |
-| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Scheduler NOT USED | Scheduler instantiated, 6 jobs registered, running in background | Updated |
-| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | EventBus NOT USED | EventBus emits CheckCompleted/Failed, TopologyChanged events | Updated |
-| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | No persistence of checks | persist_observation() writes to observations table | Updated |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Config NOT WIRED | Config loaded from file + env in main.rs | Updated all docs |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Storage NOT WIRED | Storage::connect() in main.rs, devices_handler queries DB | Updated all docs |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | Scheduler NOT USED | Scheduler instantiated, 6 jobs registered, running in background | Updated all docs |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | EventBus NOT USED | EventBus emits CheckCompleted/Failed, TopologyChanged events | Updated all docs |
+| ARCHITECTURE_AND_FUNCTIONAL_TESTS.md | No persistence of checks | persist_observation() writes to observations table | Updated all docs |
 | ROADMAP.md | P2 ✅ Complete | P2 🔄 In Progress (topology done, SNMP placeholder) | Updated |
 | ROADMAP.md | P3 Drift Detection only | P3 has drift ✅, maintenance 🔄, incident reports ⏳, DR ⏳ | Updated |
 | IMPLEMENTATION_STATUS.md | Many objectives "Planned" | Several are Partial with working code | Updated all objectives |
@@ -133,20 +283,35 @@ docs/
   ARCHITECTURE.md              (Major overhaul - current architecture reflects wired state)
   IMPLEMENTATION_STATUS.md     (Comprehensive per-objective correction)
   DEVELOPMENT.md               (Structure, test counts, config example)
+  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (Complete overhaul - current state)
   CHANGES_MADE.md              (This file)
-  ARCHITECTURE_AND_FUNCTIONAL_TESTS.md (NOT YET UPDATED - historical audit)
+
+src/
+  storage.rs                   (Added percentile/availability queries)
+  incidents.rs                 (Added IncidentEngine, root cause fields)
+  main.rs                      (Wired IncidentEngine, service dependencies)
+  topology.rs                  (Added Service node type)
+  topology_builder.rs          (Added add_service_dependency, Service exports)
+  topology.rs                  (Added Service node type)
+
+migrations/
+  20241009000001_incidents.sql (Incidents table)
+  20251011000000_root_cause.sql (Hypothesis index)
+
+scripts/
+  e2e_smoke.sh                 (Unchanged - 42/42 pass)
 ```
 
 ---
 
-## Next Steps
+## Next Steps (P4 Implementation)
 
-1. **Update `ARCHITECTURE_AND_FUNCTIONAL_TESTS.md`** to reflect current wired state (or mark as historical)
-2. **Create missing documentation**: CONFIGURATION.md, API.md, OPERATIONS.md, CONTRIBUTING.md, SECURITY.md
-3. **Begin P4 Implementation**: Objective 7 (Anomaly Detection), Objective 10 (Root Cause), Objective 14 (Capacity Planning)
-4. **Implement CI/CD**: GitHub Actions workflow with all required checks
-5. **Run full validation** before committing documentation changes
+1. **Objective 7: Anomaly Detection** — Build `BaselineEngine` from observations; implement spike/drift detectors; emit anomaly events
+2. **Objective 10: Root Cause Analysis** — Build dependency graph from topology; implement hypothesis engine with confidence scoring
+3. **Objective 14: Capacity Planning** — Query utilization trends from observations; implement linear regression; generate reports
+4. **CI/CD Pipeline** — GitHub Actions workflow with all required checks; release workflow with GHCR, SBOM, signing
+5. **Final validation and documentation**
 
 ---
 
-*This document reflects ONLY the documentation reconciliation work done in this session before starting P4.*
+*This document reflects the documentation reconciliation and prerequisite implementation work done in this session before starting P4 core objectives.*

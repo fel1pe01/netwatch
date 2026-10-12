@@ -547,7 +547,7 @@ async fn main() -> Result<()> {
             task: {
                 let builder = topology_builder.clone();
                 Arc::new(move || {
-                    let mut builder = builder.clone();
+                    let builder = builder.clone();
                     Box::pin(async move {
                         if let Err(e) = builder.build_from_discovery().await {
                             tracing::error!("Topology discovery failed: {}", e);

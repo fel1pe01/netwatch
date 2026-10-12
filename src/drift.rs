@@ -185,6 +185,9 @@ impl DriftDetector {
                 crate::topology::TopologyNodeType::Gateway => {
                     actual_gateways.insert(node.id.clone(), node);
                 }
+                crate::topology::TopologyNodeType::Service => {
+                    // Services are not currently compared for drift
+                }
             }
         }
 

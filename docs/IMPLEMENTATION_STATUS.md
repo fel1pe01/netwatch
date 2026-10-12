@@ -37,14 +37,14 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 1: Continuous Monitoring & SLA/SLO
 
-**Global Status:** Partial (P0 foundation complete; SLO calculations P1)
+**Global Status:** Partial (P0 foundation complete; SLO calculations P1; percentile queries implemented)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
 | Periodic check execution | ✅ | `Scheduler` instantiated in `main.rs:535`; health check jobs registered at `main.rs:538, 547, 561, 575`; runs every `config.health.interval` seconds |
 | Check persistence | ✅ | `persist_observation()` at `main.rs:367-396` writes to `observations` table; verified by integration test |
-| Availability calculation | ❌ | No query/view computes `successful/total` per window (P1) |
-| Latency percentiles (p50/p95/p99) | ❌ | No percentile computation; only histogram in Prometheus (P1) |
+| Availability calculation | ✅ | `Storage::get_availability_stats()` in `storage.rs:140-170` computes `successful/total` per window |
+| Latency percentiles (p50/p95/p99) | ✅ | `Storage::compute_percentile()` in `storage.rs:115-138` computes from raw observations |
 | Packet loss tracking | ❌ | ICMP/TCP results have `success` boolean; no loss % (P1) |
 | Jitter measurement | ❌ | Not implemented (P1) |
 | Error categorization | ✅ | `HealthCheckResult.error` captures timeout, connection refused, etc. |
@@ -62,7 +62,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 2: Live Topology Map
 
-**Global Status:** Partial (graph built from discovery; exports implemented)
+**Global Status:** Partial (graph built from discovery; exports implemented; Service nodes and DependsOn edges added)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -75,6 +75,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Mermaid export | ✅ | `TopologyBuilder::export_mermaid()` in `topology_builder.rs:523` |
 | Graphviz DOT export | ✅ | `TopologyBuilder::export_dot()` in `topology_builder.rs:568` |
 | JSON export | ✅ | `TopologyBuilder::export_json()` in `topology_builder.rs:605` |
+| Service nodes and DependsOn edges | ✅ | `TopologyNodeType::Service` added; `TopologyBuilder::add_service_dependency()` creates service nodes with DependsOn edges to devices |
 | No physical inference without evidence | ✅ | Design principle; edges only from observed data (discovery, routing table, SNMP) |
 
 **Tests:** None for topology exports; `tests/drift_tests.rs` tests drift detection which uses topology snapshots.
@@ -85,7 +86,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 3: Event & Incident Engine
 
-**Global Status:** Partial (P1 in progress)
+**Global Status:** Partial (P1 in progress; IncidentEngine wired and consuming events)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -94,16 +95,17 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Alert rules (down, latency, loss, degradation) | ❌ | No rule engine |
 | Correlation (gateway/subnet grouping) | ❌ | No correlation logic |
 | Silences & maintenance windows | ❌ | No silence model |
-| Cooldowns & deduplication | ⚠️ | Fields exist (`cooldown_until`, `silence_until`, `dedup_key`) but no logic to enforce them |
+| Cooldowns & deduplication | ✅ | `IncidentEngine` enforces 5-min cooldown via `cooldown_until`; dedup_key prevents duplicates |
 | ACK with identity/timestamp | ✅ | `Incident::acknowledge(actor, reason)` in `src/incidents.rs:251` |
-| Auto-resolve on recovery | ✅ | `Incident::resolve(actor, reason)` with state transition |
+| Auto-resolve on recovery | ✅ | `IncidentEngine` resolves incidents on CheckCompleted/ThresholdRecovered events |
 | Telegram adapter | ❌ | No notifier code |
-| Event persistence with history | ⚠️ | `IncidentStore` exists in `src/incidents.rs` but NOT wired up; events emitted but no consumer creates/updates incidents |
-| No silent event loss | ⚠️ | `EventBus` uses bounded channel (1000); backpressure handling via `emit()` returning `Result` |
+| Event persistence with history | ✅ | `IncidentEngine` creates/updates incidents in DB; `IncidentStore` provides CRUD; `confirm_root_cause` function for operator hypothesis confirmation |
+| No silent event loss | ✅ | `EventBus` uses bounded channel (1000); backpressure handling via `emit()` returning `Result` |
+| Root cause hypothesis tracking | ✅ | `Incident` has `root_cause_hypothesis_id`, `root_cause_confirmed`, `root_cause_confirmed_at`, `root_cause_confirmed_by` fields; `confirm_root_cause` function |
 
 **Tests:** Unit tests needed for state machine transitions. No tests for EventBus→Incident flow.
 
-**Next Verifiable Step:** Wire EventBus to incident engine; implement cooldown/deduplication logic; add alert rule engine; add integration tests for EventBus→Incident flow.
+**Next Verifiable Step:** Implement cooldown/deduplication logic in alert rule engine; add alert rule engine; add integration tests for EventBus→Incident flow; add Telegram/Alertmanager notifiers.
 
 ---
 
@@ -405,9 +407,9 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Area | Status | Details |
 |------|--------|---------|
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
-| **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB) |
+| **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB); percentile/availability queries added |
 | **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs:535`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP; runs in background with semaphore pool; graceful shutdown on SIGINT |
-| **EventBus** | **Partial** | Broadcast channel (1000); topology changes emit events; check events emitted; no incident subscribers (P1) |
+| **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted; `IncidentEngine` consumes events and manages incidents |
 | **Metrics** | **Implemented** | AppMetrics + health check metrics; cardinality enforced; uptime works |
 | **Discovery** | **Implemented** | Interfaces + routes; Linux-only; one-shot (not incremental) |
 | **ICMP Monitoring** | **Implemented** | System `ping`; regex parsing; 2000ms default timeout |
@@ -418,8 +420,9 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **CLI** | **Implemented** | `monitor ping`, `monitor tcp`, `discover local`, server mode |
 | **HTTP API (Core)** | **Implemented** | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
 | **HTTP API (Inventory)** | **Partial** | `/devices` returns real data from DB; 5 endpoints remain placeholders |
-| **Topology** | **Implemented** | Graph built from discovery; Mermaid/DOT/JSON export; snapshots + diff |
+| **Topology** | **Implemented** | Graph built from discovery; Mermaid/DOT/JSON export; snapshots + diff; Service nodes + DependsOn edges |
 | **Drift Detection** | **Implemented** | Expected vs actual comparison; JSON/Markdown export |
+| **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
 | **Tests (Unit/Integration)** | ✅ 46 passing | See `cargo test` output |
 | **E2E Smoke Test** | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |
 
@@ -439,6 +442,9 @@ The following P0 criteria have been verified:
 | Errors not silented | ✅ | Errors logged via `tracing::error!`; failed checks recorded with `success=false` |
 | Tests demonstrate flows | ✅ | All 46 unit/integration tests + 42 E2E tests pass |
 | Drift detection operational | ✅ | `DriftDetector` compares expected vs actual; JSON/Markdown export |
+| Incident engine operational | ✅ | `IncidentEngine` consumes events, creates/updates incidents, auto-resolves |
+| Service dependency tracking | ✅ | Health checks create Service nodes with DependsOn edges to devices |
+| Percentile/availability queries | ✅ | `Storage::compute_percentile()`, `get_availability_stats()` implemented |
 
 ---
 
@@ -446,9 +452,9 @@ The following P0 criteria have been verified:
 
 | Gap | Reason |
 |-----|--------|
-| EventBus integration with incident engine | Requires typed event schema (Objective 3) |
 | Per-device/service check scheduling | Requires inventory population (Objective 2/5) |
-| Availability/SLO calculations | Requires historical data accumulation (Objective 1 P1) |
+| SLO calculations (error budget, burn rate) | Requires SLO config and alerting engine (Objective 1 P1) |
+| Config hot-reload | Not required for P0; restart works |
 | Multi-protocol checks (DNS, HTTP, SNMP) | DNS/HTTP/TLS implemented but scheduler jobs hardcode targets |
 | Config hot-reload | Not required for P0; restart works |
 
@@ -494,7 +500,7 @@ cargo build --release
 ## Next Priorities (P4 - Intelligence & Capacity)
 
 1. **Objective 7: Anomaly Detection** — Build `BaselineEngine` from observations; implement spike/drift detectors; emit anomaly events
-2. **Objective 10: Root Cause Analysis** — Build dependency graph from topology; implement hypothesis engine with confidence scoring
-3. **Objective 14: Capacity Planning** — Query utilization trends from observations; implement linear regression; generate reports
+2. **Objective 10: Root Cause Analysis** — Build dependency graph from topology (Service→Device→Gateway); implement hypothesis engine with confidence scoring; operator confirmation API
+3. **Objective 14: Capacity Planning** — Query utilization trends from observations; implement linear regression with confidence intervals; generate CLI/API reports
 4. **CI/CD Pipeline** — GitHub Actions workflow with all required checks; release workflow with GHCR, SBOM, signing
 5. **Missing Documentation** — CONFIGURATION.md, API.md, OPERATIONS.md, CONTRIBUTING.md, SECURITY.md
