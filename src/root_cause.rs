@@ -443,7 +443,9 @@ impl DependencyGraph {
         let to_idx = self.node_indices.get(to);
 
         if let (Some(&from_idx), Some(&to_idx)) = (from_idx, to_idx) {
-            let result = dijkstra(&self.graph, from_idx, Some(to_idx), |e| 1.0 / e.weight().confidence);
+            let result = dijkstra(&self.graph, from_idx, Some(to_idx), |e| {
+                1.0 / e.weight().confidence
+            });
             if result.contains_key(&to_idx) {
                 // Reconstruct path
                 let mut path = Vec::new();
