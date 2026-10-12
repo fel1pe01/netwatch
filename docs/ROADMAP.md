@@ -10,7 +10,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 | P1 | Operational Observability | 3, 4, 13 | 🔄 In Progress | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
 | P2 | Infrastructure Visibility | 2, 5 | 🔄 In Progress | Live topology, SNMP, inventory |
 | P3 | Operational Reliability | 11, 12, 15, 16 | 🔄 In Progress | Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳ |
-| P4 | Intelligence & Capacity | 7, 10, 14 | Planned | Anomaly detection, root cause, capacity planning |
+| P4 | Intelligence & Capacity | 7, 10, 14 | 🔄 In Progress | Anomaly detection (Partial), root cause (Planned), capacity planning (Partial) |
 | P5 | Scale & Advanced Analysis | 9, 6 | Planned | Distributed agents, traffic analysis |
 
 **Objective 8 (Engineering Quality) is transversal** — CI/CD, testing, security, documentation apply to every phase.
@@ -20,7 +20,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - **P1**: 🔄 In Progress — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
 - **P2**: 🔄 In Progress — Topology builder with Mermaid/DOT/JSON exports complete; SNMP collector placeholder; inventory tables exist but empty
 - **P3**: 🔄 In Progress — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
-- **P4**: Planned — Anomaly detection, root cause analysis, capacity planning
+- **P4**: 🔄 In Progress — Anomaly detection (spike/drift detection complete, EventBus integration complete, IncidentEngine integration complete; unit tests + detector registry pending); Root cause analysis (Planned); Capacity planning (linear regression complete, reports complete, scheduler integration complete; CLI/API + unit tests + SNMP data pending)
 - **P5**: Planned — Distributed agents, traffic analysis
 
 ---

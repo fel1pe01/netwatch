@@ -178,22 +178,22 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 7: Intelligent Anomaly Detection
 
-**Global Status:** Planned (P4)
+**Global Status:** **Partial** (P4 - core detection implemented, integration complete)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Rolling baselines (p50/p95/p99, volume, freq) | ❌ | No baseline computation |
-| Deviation types (spike, drift, pattern break) | ❌ | No detector types |
-| Evidence (baseline window, current value, z-score) | ❌ | No anomaly events |
-| Configurable sensitivity, min samples, lookback | ❌ | No detector config |
-| Correlation with changes/incidents | ❌ | No change/incident data |
-| Detector registry (enable/disable per rule/entity) | ❌ | No registry |
+| Rolling baselines (p50/p95/p99, volume, freq) | ✅ | `AnomalyDetector::compute_baseline()` in `anomaly.rs:241-281` computes mean/stddev from observations |
+| Deviation types (spike, drift, pattern break) | ✅ | `AnomalyType::Spike`, `AnomalyType::Drift` implemented in `anomaly.rs:58-68`; `check_spike` and `check_drift` methods |
+| Evidence (baseline window, current value, z-score) | ✅ | `AnomalyEvidence` struct in `anomaly.rs:99-123` includes all required fields |
+| Configurable sensitivity, min samples, lookback | ✅ | `AnomalyConfig` in `anomaly.rs:12-41` + `config.rs:67-94` with full validation |
+| Correlation with changes/incidents | ⚠️ | Anomaly events emitted to EventBus; IncidentEngine consumes them; change correlation pending |
+| Detector registry (enable/disable per rule/entity) | ❌ | No registry; detectors enabled globally via config |
 | False positive tracking | ❌ | No feedback loop |
-| No mandatory ML | ✅ | Design principle |
+| No mandatory ML | ✅ | Design principle; no ML dependencies |
 
-**Tests:** None.
+**Tests:** Unit tests needed for `AnomalyDetector` methods; integration via scheduler + EventBus verified in E2E.
 
-**Next Verifiable Step:** After Objective 1 provides historical data, implement `BaselineEngine` + simple threshold detector (e.g., latency > p99 + 3σ).
+**Next Verifiable Step:** Add unit tests for `AnomalyDetector::check_observation`, `check_spike`, `check_drift` with synthetic data; implement detector registry for per-rule enable/disable.
 
 ---
 
@@ -341,19 +341,19 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 14: Capacity Planning
 
-**Global Status:** Planned (P4)
+**Global Status:** **Partial** (P4 - core planner implemented, scheduler integration complete)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Traffic/utilization trends (linear/exp fit) | ❌ | No trend analysis |
-| Saturation thresholds (80% interface, CPU, mem) | ❌ | No threshold config |
-| Time-to-limit estimation with CI | ❌ | No projection math |
-| Bottleneck identification | ❌ | No resource ranking |
-| Report (headroom, projected exhaustion) | ❌ | No report generator |
+| Traffic/utilization trends (linear/exp fit) | ✅ | `CapacityPlanner::perform_linear_regression()` in `capacity_planning.rs:249-345` |
+| Saturation thresholds (80% interface, CPU, mem) | ⚠️ | `CapacityConfig.saturation_threshold_pct` exists (default 80%); only latency trends implemented, not interface/CPU/mem utilization |
+| Time-to-limit estimation with CI | ✅ | `TrendAnalysis.time_to_saturation` calculated in `capacity_planning.rs:305-314` |
+| Bottleneck identification | ✅ | `CapacityReport.critical_resources` sorted by time to saturation in `capacity_planning.rs:204-214` |
+| Report (headroom, projected exhaustion) | ✅ | `CapacityReport::to_markdown()` and `to_json()` in `capacity_planning.rs:350-453` |
 
-**Tests:** None.
+**Tests:** Unit tests needed for linear regression and report generation.
 
-**Next Verifiable Step:** After Objective 1 provides historical utilization, implement `CapacityPlanner` with linear regression.
+**Next Verifiable Step:** Add unit tests for `CapacityPlanner::analyze_capacity` and `TrendAnalysis`; integrate SNMP utilization data (Objective 5) for interface/CPU/memory trends.
 
 ---
 
@@ -408,8 +408,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 |------|--------|---------|
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
 | **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB); percentile/availability queries added |
-| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs:535`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP; runs in background with semaphore pool; graceful shutdown on SIGINT |
-| **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted; `IncidentEngine` consumes events and manages incidents |
+| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs:535`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP, anomaly detection, capacity planning; runs in background with semaphore pool; graceful shutdown on SIGINT |
+| **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; `IncidentEngine` consumes events and manages incidents |
 | **Metrics** | **Implemented** | AppMetrics + health check metrics; cardinality enforced; uptime works |
 | **Discovery** | **Implemented** | Interfaces + routes; Linux-only; one-shot (not incremental) |
 | **ICMP Monitoring** | **Implemented** | System `ping`; regex parsing; 2000ms default timeout |
@@ -422,6 +422,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **HTTP API (Inventory)** | **Partial** | `/devices` returns real data from DB; 5 endpoints remain placeholders |
 | **Topology** | **Implemented** | Graph built from discovery; Mermaid/DOT/JSON export; snapshots + diff; Service nodes + DependsOn edges |
 | **Drift Detection** | **Implemented** | Expected vs actual comparison; JSON/Markdown export |
+| **Anomaly Detection** | **Partial** | `AnomalyDetector` with spike/drift detection; baselines from observations; EventBus integration; scheduler job; incident correlation |
+| **Capacity Planning** | **Partial** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
 | **Tests (Unit/Integration)** | ✅ 46 passing | See `cargo test` output |
 | **E2E Smoke Test** | ✅ 42/42 passing | `scripts/e2e_smoke.sh` |

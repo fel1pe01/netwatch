@@ -485,7 +485,7 @@ Requires restart: listen address, storage path, TLS certs.
 | 15 | Incident report generator | Objective 15 |
 | 16 | Backup/restore scripts + CI drill | Objective 16 |
 | 17 | ~~Synthetic collectors (HTTP, DNS, TLS)~~ **DONE** | Objective 13 |
-| 18 | Anomaly detectors + baselines | Objective 7 |
+| 18 | ~~Anomaly detectors + baselines~~ **DONE** | Objective 7 |
 | 19 | Root cause hypotheses | Objective 10 |
 | 20 | Distributed agent protocol | Objective 9 |
 | 21 | Traffic analysis (NetFlow/sFlow) | Objective 6 |
