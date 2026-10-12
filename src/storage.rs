@@ -119,6 +119,46 @@ impl Storage {
         Ok(rows.into_iter().map(|r| r.get::<f64, _>("value")).collect())
     }
 
+    /// Get latency observations with timestamps for time series analysis
+    pub async fn get_latency_observations_with_timestamps(
+        &self,
+        device_id: &str,
+        protocol: &str,
+        since: DateTime<Utc>,
+        until: Option<DateTime<Utc>>,
+    ) -> Result<Vec<Observation>> {
+        let metric = format!("{}_latency_ms", protocol);
+        let mut query = String::from(
+            "SELECT id, device_id, metric, value, source, confidence, observed_at, created_at, updated_at FROM observations WHERE device_id = ? AND metric = ? AND observed_at >= ? AND value > 0"
+        );
+        let mut args: Vec<String> = vec![device_id.to_string(), metric, since.to_rfc3339()];
+
+        if let Some(until) = until {
+            query.push_str(" AND observed_at <= ?");
+            args.push(until.to_rfc3339());
+        }
+        query.push_str(" ORDER BY observed_at ASC");
+
+        let mut q = sqlx::query(&query);
+        for arg in args {
+            q = q.bind(arg);
+        }
+        let rows = q.fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|r| {
+            ObservationRow {
+                id: r.get("id"),
+                device_id: r.get("device_id"),
+                metric: r.get("metric"),
+                value: r.get("value"),
+                source: r.get("source"),
+                confidence: r.get("confidence"),
+                observed_at: r.get("observed_at"),
+                created_at: r.get("created_at"),
+                updated_at: r.get("updated_at"),
+            }.into_observation().unwrap()
+        }).collect())
+    }
+
     /// Compute percentile from observations (uses SQLite's percentile approximation via ORDER BY + LIMIT)
     pub async fn compute_percentile(
         &self,

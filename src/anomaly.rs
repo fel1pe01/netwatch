@@ -1,10 +1,13 @@
 use anyhow::Result;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::config::AnomalyConfig as ConfigAnomalyConfig;
+use crate::events::{AnomalyEvidence as EventAnomalyEvidence, EntityType, EventBus};
 use crate::storage::Storage;
 
 /// Anomaly detection configuration
@@ -36,6 +39,20 @@ impl Default for AnomalyConfig {
             enable_spike_detection: true,
             enable_drift_detection: true,
             enable_pattern_break_detection: false,
+        }
+    }
+}
+
+impl From<ConfigAnomalyConfig> for AnomalyConfig {
+    fn from(cfg: ConfigAnomalyConfig) -> Self {
+        Self {
+            min_samples: cfg.min_samples.unwrap_or(10),
+            lookback_window_seconds: cfg.lookback_window_seconds.unwrap_or(3600),
+            sensitivity: cfg.sensitivity.unwrap_or(1.0),
+            min_z_score: cfg.min_z_score.unwrap_or(3.0),
+            enable_spike_detection: cfg.enable_spike_detection.unwrap_or(true),
+            enable_drift_detection: cfg.enable_drift_detection.unwrap_or(true),
+            enable_pattern_break_detection: cfg.enable_pattern_break_detection.unwrap_or(false),
         }
     }
 }
@@ -484,5 +501,104 @@ impl AnomalyDetector {
     /// Clear cached baselines (call periodically to force recomputation)
     pub fn clear_baselines(&mut self) {
         self.baselines.clear();
+    }
+
+    /// Convert AnomalyEvent to EventBus AnomalyEvidence
+    fn anomaly_event_to_evidence(&self, event: &AnomalyEvent) -> EventAnomalyEvidence {
+        EventAnomalyEvidence {
+            entity_id: event.entity_id.clone(),
+            entity_type: event.entity_type.clone(),
+            metric: event.metric.clone(),
+            protocol: event.protocol.clone(),
+            anomaly_type: event.anomaly_type.to_string(),
+            severity: event.severity.to_string(),
+            current_value: event.evidence.current_value,
+            baseline_mean: event.evidence.baseline_mean,
+            baseline_stddev: event.evidence.baseline_stddev,
+            z_score: event.evidence.z_score,
+            sample_count: event.evidence.sample_count,
+            window_start: event.evidence.window_start.to_rfc3339(),
+            window_end: event.evidence.window_end.to_rfc3339(),
+            rule_id: event.rule_id.clone(),
+            confidence: event.confidence,
+            description: event.description.clone(),
+        }
+    }
+
+    /// Get all entity/protocol combinations that have observations
+    async fn get_monitored_entities(&self) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT device_id, metric FROM observations
+            WHERE observed_at >= datetime('now', '-1 hour')
+            "#,
+        )
+        .fetch_all(&self.storage.pool)
+        .await?;
+
+        let mut entities = Vec::new();
+        for row in rows {
+            let device_id: String = row.get("device_id");
+            let metric: String = row.get("metric");
+            // Extract protocol from metric (e.g., "icmp_latency_ms" -> "icmp")
+            if let Some(protocol) = metric.strip_suffix("_latency_ms") {
+                entities.push((device_id, protocol.to_string()));
+            }
+        }
+        Ok(entities)
+    }
+
+    /// Run anomaly analysis on all monitored entities and emit events
+    pub async fn analyze_and_emit(&mut self, event_bus: &EventBus) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        let entities = self.get_monitored_entities().await?;
+
+        for (entity_id, protocol) in entities {
+            // Get recent observations for this entity/protocol
+            let metric = format!("{}_latency_ms", protocol);
+            let values = self
+                .storage
+                .get_latency_observations(
+                    &entity_id,
+                    &protocol,
+                    Utc::now() - Duration::minutes(5),
+                    Some(Utc::now()),
+                )
+                .await?;
+
+            if values.is_empty() {
+                continue;
+            }
+
+            // Check each recent observation for anomalies
+            for latest_value in values {
+                // Check for anomalies
+                let anomalies = self
+                    .check_observation(&entity_id, &metric, &protocol, latest_value, "device")
+                    .await?;
+
+                // Emit events for each anomaly
+                for anomaly in anomalies {
+                    let evidence = self.anomaly_event_to_evidence(&anomaly);
+                    let entity_type = match anomaly.entity_type.as_str() {
+                        "device" => EntityType::Device,
+                        "interface" => EntityType::Interface,
+                        "service" => EntityType::Service,
+                        _ => EntityType::Device,
+                    };
+                    if let Err(e) = event_bus
+                        .emit_anomaly_detected(anomaly.entity_id.clone(), entity_type, evidence)
+                        .await
+                    {
+                        tracing::error!("Failed to emit anomaly event: {}", e);
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }
