@@ -3,11 +3,14 @@ use axum::serve;
 use axum::{routing::get, Router};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use netwatch::anomaly::{AnomalyConfig as AnomalyDetectorConfig, AnomalyDetector};
 use netwatch::api::router as api_router;
+use netwatch::capacity_planning::{CapacityConfig, CapacityPlanner};
 use netwatch::config::Config;
 use netwatch::discovery::interfaces::discover_interfaces;
 use netwatch::discovery::routing::discover_routes;
 use netwatch::events::{CheckEvidence, EntityType, EventBus};
+use netwatch::incidents::{IncidentEngine, IncidentStore};
 use netwatch::logging::init_logging;
 use netwatch::metrics::AppMetrics;
 use netwatch::monitoring::metrics::{
@@ -48,6 +51,11 @@ enum NetwatchCommand {
         #[clap(subcommand)]
         kind: MonitorKind,
     },
+    #[command(name = "capacity")]
+    Capacity {
+        #[clap(subcommand)]
+        kind: CapacityKind,
+    },
 }
 #[derive(Subcommand)]
 enum DiscoverKind {
@@ -58,6 +66,14 @@ enum DiscoverKind {
 enum MonitorKind {
     Ping { target: String },
     Tcp { host: String, port: u16 },
+}
+#[derive(Subcommand)]
+enum CapacityKind {
+    /// Generate capacity planning report
+    Report {
+        #[arg(long, default_value = "markdown")]
+        format: String,
+    },
 }
 
 async fn register_monitoring_jobs(
@@ -506,6 +522,55 @@ async fn main() -> Result<()> {
             }
             return Ok(());
         }
+        Some(NetwatchCommand::Capacity { kind }) => {
+            match kind {
+                CapacityKind::Report { format } => {
+                    let storage = Storage::connect(&Config::default().storage.path).await?;
+                    let config = CapacityConfig::default();
+                    let mut planner = CapacityPlanner::new(Arc::new(storage), config);
+                    let report = planner.analyze_capacity().await?;
+                    
+                    match format.as_str() {
+                        "json" => println!("{}", report.to_json()?),
+                        _ => println!("{}", report.to_markdown()),
+                    }
+                    return Ok(());
+                }
+            }
+            return Ok(());
+        }
+        Some(NetwatchCommand::Discover { kind }) => {
+            match kind {
+                DiscoverKind::Local => {
+                    let interfaces = discover_interfaces().await.unwrap_or_default();
+                    let routes = discover_routes().await.unwrap_or_default();
+                    println!("Discovered {} interfaces:", interfaces.len());
+                    for iface in interfaces {
+                        println!(
+                            "  - name: {}, state: {}, ip4: {}, ip6: {}, mac: {}, mtu: {}",
+                            iface.name,
+                            iface.oper_state.unwrap_or_else(|| "unknown".to_string()),
+                            iface.ipv4.unwrap_or_else(|| "none".to_string()),
+                            iface.ipv6.unwrap_or_else(|| "none".to_string()),
+                            iface.mac.unwrap_or_else(|| "none".to_string()),
+                            iface.mtu.unwrap_or(0)
+                        );
+                    }
+                    println!("Discovered {} routes:", routes.len());
+                    for rt in routes {
+                        println!(
+                            "  - dest: {}, via: {}, dev: {}, metric: {}, mask: {}",
+                            rt.destination,
+                            rt.gateway.unwrap_or_else(|| "none".to_string()),
+                            rt.interface,
+                            rt.metric.map_or("none".to_string(), |m| m.to_string()),
+                            rt.mask.unwrap_or_else(|| "none".to_string())
+                        );
+                    }
+                }
+            }
+            return Ok(());
+        }
         None => {
             // Server mode handled below
         }
@@ -525,11 +590,25 @@ async fn main() -> Result<()> {
     // Initialize topology builder
     let topology_builder = TopologyBuilder::new(topology_store.clone());
 
+    // Initialize anomaly detector
+    let anomaly_config: AnomalyDetectorConfig = config.anomaly.clone().into();
+    let anomaly_detector = AnomalyDetector::new(storage.clone(), anomaly_config);
+    let anomaly_detector = Arc::new(tokio::sync::Mutex::new(anomaly_detector));
+
+    // Initialize capacity planner
+    let capacity_config = CapacityConfig::default();
+    let capacity_planner = CapacityPlanner::new(storage.clone(), capacity_config);
+    let capacity_planner = Arc::new(tokio::sync::Mutex::new(capacity_planner));
+
     // Initialize SNMP collector
     let snmp_collector = SnmpCollector::new(config.scheduler.concurrency, 100);
 
     // Initialize event bus
     let event_bus = Arc::new(EventBus::new());
+
+    // Initialize incident store and engine
+    let incident_store = IncidentStore::new(storage.pool.clone());
+    let incident_engine = IncidentEngine::new(incident_store, event_bus.subscribe(), 300);
 
     // Initialize scheduler
     let mut scheduler = Scheduler::new(config.scheduler.concurrency);
@@ -585,10 +664,63 @@ async fn main() -> Result<()> {
         scheduler.add_job(job);
     }
 
+    // Register anomaly detection job
+    if config.anomaly.enabled.unwrap_or(true) {
+        let anomaly_detector = anomaly_detector.clone();
+        let event_bus = event_bus.clone();
+        let interval = Duration::from_secs(config.anomaly.interval.unwrap_or(300));
+        let job = netwatch::scheduler::Job {
+            name: "anomaly_detection".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let anomaly_detector = anomaly_detector.clone();
+                let event_bus = event_bus.clone();
+                Box::pin(async move {
+                    tracing::info!("Running anomaly detection analysis...");
+                    let mut detector = anomaly_detector.lock().await;
+                    if let Err(e) = detector.analyze_and_emit(&event_bus).await {
+                        tracing::error!("Anomaly detection failed: {}", e);
+                    }
+                    Ok(())
+                })
+            }),
+        };
+        scheduler.add_job(job);
+    }
+
+    // Register capacity planning job
+    if config.capacity.enabled.unwrap_or(true) {
+        let capacity_planner = capacity_planner.clone();
+        let interval = Duration::from_secs(config.capacity.interval.unwrap_or(3600));
+        let job = netwatch::scheduler::Job {
+            name: "capacity_planning".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let capacity_planner = capacity_planner.clone();
+                Box::pin(async move {
+                    tracing::info!("Running capacity planning analysis...");
+                    let mut planner = capacity_planner.lock().await;
+                    if let Err(e) = planner.analyze_capacity().await {
+                        tracing::error!("Capacity planning failed: {}", e);
+                    }
+                    Ok(())
+                })
+            }),
+        };
+        scheduler.add_job(job);
+    }
+
     // Start scheduler in background
     let scheduler_handle = tokio::spawn(async move {
         if let Err(e) = scheduler.run().await {
             tracing::error!("Scheduler error: {}", e);
+        }
+    });
+
+    // Start incident engine in background
+    let incident_engine_handle = tokio::spawn(async move {
+        if let Err(e) = incident_engine.run().await {
+            tracing::error!("Incident engine error: {}", e);
         }
     });
 
@@ -600,7 +732,7 @@ async fn main() -> Result<()> {
         tracing::info!("Shutdown signal received");
         // Give scheduler time to finish current jobs
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    };
+    }
 
     // Start HTTP server
     let addr: SocketAddr = config.agent.listen.parse()?;
@@ -627,6 +759,7 @@ async fn main() -> Result<()> {
 
     // Shutdown scheduler
     scheduler_handle.abort();
+    incident_engine_handle.abort();
 
     Ok(())
 }
