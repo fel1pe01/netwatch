@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::topology::{TopologyEdge, TopologyGraph, TopologyNode, TopologyNodeType};
+use crate::topology::{NodeState, TopologyEdge, TopologyGraph, TopologyNode, TopologyNodeType};
 use crate::topology_store::TopologyStore;
 
 /// Root cause hypothesis
@@ -28,6 +28,8 @@ pub struct Hypothesis {
     pub confirmed: bool,
     pub confirmed_by: Option<String>,
     pub confirmed_at: Option<DateTime<Utc>>,
+    /// True if this hypothesis represents a root cause entity (no upstream dependencies)
+    pub is_root_cause: bool,
 }
 
 /// Evidence supporting a hypothesis
@@ -55,9 +57,9 @@ pub struct DependencyLink {
 }
 
 impl Hypothesis {
-    /// Returns true if this hypothesis represents a root cause (no upstream dependencies)
+    /// Returns true if this hypothesis represents a root cause entity (no upstream dependencies)
     pub fn is_root(&self) -> bool {
-        self.dependency_path.is_empty()
+        self.is_root_cause
     }
 }
 
@@ -92,11 +94,11 @@ impl RootCauseAnalyzer {
 
         // Group failing observations by entity
         let mut entity_failures: HashMap<String, Vec<FailingObservation>> = HashMap::new();
-        for obs in failing_observations {
+        for obs in &failing_observations {
             entity_failures
                 .entry(obs.device_id.clone())
                 .or_default()
-                .push(obs);
+                .push(obs.clone());
         }
 
         // Build topology graph for dependency analysis
@@ -108,17 +110,53 @@ impl RootCauseAnalyzer {
         // For each failing entity, find potential root causes
         for (entity_id, failures) in entity_failures {
             if let Some(hypothesis) = self
-                .generate_hypothesis(&entity_id, &failures, &graph)
+                .generate_hypothesis(&entity_id, &failures, &failing_observations, &graph)
                 .await?
             {
                 hypotheses.push(hypothesis);
             }
         }
 
-        // Sort hypotheses by confidence (descending)
-        hypotheses.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        // Sort hypotheses by confidence (descending), then by non-empty dependency_path (prefer non-empty)
+        hypotheses.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap()
+                .then_with(|| {
+                    // Prefer non-empty dependency_path for equal confidence
+                    let a_has_path = !a.dependency_path.is_empty();
+                    let b_has_path = !b.dependency_path.is_empty();
+                    b_has_path.cmp(&a_has_path)
+                })
+        });
 
-        Ok(hypotheses)
+        // Deduplicate by entity_id: keep highest confidence, prefer non-empty dependency_path on tie
+        let mut deduped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for h in hypotheses {
+            if seen.insert(h.entity_id.clone()) {
+                deduped.push(h);
+            } else {
+                // Already have a hypothesis for this entity - keep the better one
+                if let Some(existing_idx) = deduped.iter().position(|e| e.entity_id == h.entity_id)
+                {
+                    let existing = &deduped[existing_idx];
+                    // Prefer higher confidence, or non-empty dependency_path on tie
+                    let replace = if h.confidence > existing.confidence {
+                        true
+                    } else if (h.confidence - existing.confidence).abs() < f64::EPSILON {
+                        !h.dependency_path.is_empty() && existing.dependency_path.is_empty()
+                    } else {
+                        false
+                    };
+                    if replace {
+                        deduped[existing_idx] = h;
+                    }
+                }
+            }
+        }
+
+        Ok(deduped)
     }
 
     /// Get failing observations in a time window
@@ -208,15 +246,31 @@ impl RootCauseAnalyzer {
         &self,
         entity_id: &str,
         failures: &[FailingObservation],
+        all_failures: &[FailingObservation], // All failures in time window for scoring
         graph: &DependencyGraph,
     ) -> Result<Option<Hypothesis>> {
         // Find all entities that depend on this entity (upstream in dependency graph)
         let upstream_causes = graph.find_upstream_causes(entity_id);
 
         if upstream_causes.is_empty() {
-            // No upstream dependencies - this entity might be the root cause
+            // No upstream dependencies - score this entity as a potential root cause
+            let score = self
+                .score_cause(
+                    &TopologyNode {
+                        id: entity_id.to_string(),
+                        node_type: TopologyNodeType::Device,
+                        label: String::new(),
+                        properties: Default::default(),
+                        state: NodeState::Unknown,
+                        observed_at: Utc::now(),
+                        created_at: Utc::now(),
+                        updated_at: Utc::now(),
+                    },
+                    all_failures, // Use all failures for self-scoring too
+                )
+                .await?;
             return Ok(Some(
-                self.create_hypothesis(entity_id, failures, vec![], true)
+                self.create_hypothesis(entity_id, failures, vec![], score, true)
                     .await?,
             ));
         }
@@ -224,7 +278,7 @@ impl RootCauseAnalyzer {
         // Score each potential cause
         let mut scored_causes = Vec::new();
         for cause in upstream_causes {
-            let score = self.score_cause(&cause, failures).await?;
+            let score = self.score_cause(&cause, all_failures).await?;
             if score > 0.0 {
                 scored_causes.push((cause, score));
             }
@@ -237,12 +291,15 @@ impl RootCauseAnalyzer {
             let dependency_path = self
                 .build_dependency_path(entity_id, &best_cause.id)
                 .await?;
+            // Check if best_cause is a root cause (no upstream dependencies)
+            let is_root_cause = graph.find_upstream_causes(&best_cause.id).is_empty();
             return Ok(Some(
                 self.create_hypothesis(
                     &best_cause.id,
                     failures,
                     dependency_path,
-                    *confidence > 0.5, // treat as root if confidence > 0.5
+                    *confidence,
+                    is_root_cause,
                 )
                 .await?,
             ));
@@ -250,7 +307,7 @@ impl RootCauseAnalyzer {
 
         // Fallback: no clear upstream cause found
         Ok(Some(
-            self.create_hypothesis(entity_id, failures, vec![], false)
+            self.create_hypothesis(entity_id, failures, vec![], 0.5, false)
                 .await?,
         ))
     }
@@ -330,15 +387,14 @@ impl RootCauseAnalyzer {
         entity_id: &str,
         failures: &[FailingObservation],
         dependency_path: Vec<DependencyLink>,
-        is_root: bool,
+        confidence: f64,
+        is_root_cause: bool,
     ) -> Result<Hypothesis> {
         let entity = self
             .topology_store
             .get_node(entity_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Entity not found"))?;
-
-        let confidence = if is_root { 0.9 } else { 0.7 };
 
         let evidence: Vec<HypothesisEvidence> = failures
             .iter()
@@ -379,6 +435,7 @@ impl RootCauseAnalyzer {
             confirmed: false,
             confirmed_by: None,
             confirmed_at: None,
+            is_root_cause,
         })
     }
 }
@@ -425,12 +482,12 @@ impl DependencyGraph {
     fn find_upstream_causes(&self, entity_id: &str) -> Vec<TopologyNode> {
         let mut causes = Vec::new();
         if let Some(&idx) = self.node_indices.get(entity_id) {
-            // Walk upstream (reverse edges) to find dependencies
+            // Walk upstream following dependency edges (Outgoing: dependent -> dependency)
             for edge in self
                 .graph
-                .edges_directed(idx, petgraph::Direction::Incoming)
+                .edges_directed(idx, petgraph::Direction::Outgoing)
             {
-                let target_idx = edge.source();
+                let target_idx = edge.target();
                 if let Some(node) = self.graph.node_weight(target_idx) {
                     if matches!(
                         node.node_type,
@@ -454,7 +511,7 @@ impl DependencyGraph {
                 1.0 / e.weight().confidence
             });
             if result.contains_key(&to_idx) {
-                // Reconstruct path
+                // Reconstruct path by walking backwards from 'to' using the distance map
                 let mut path = Vec::new();
                 let mut current = to_idx;
                 path.push(self.graph.node_weight(current).unwrap().id.clone());
@@ -464,9 +521,8 @@ impl DependencyGraph {
                         .graph
                         .edges_directed(current, petgraph::Direction::Incoming)
                     {
-                        if result.get(&edge.source())
-                            == Some(&(result[&current] - 1.0 / result[&current]))
-                        {
+                        let edge_weight = 1.0 / edge.weight().confidence;
+                        if result.get(&edge.source()) == Some(&(result[&current] - edge_weight)) {
                             current = edge.source();
                             path.push(self.graph.node_weight(current).unwrap().id.clone());
                             break;
@@ -474,6 +530,7 @@ impl DependencyGraph {
                     }
                 }
                 path.reverse();
+                return path;
             }
         }
         Vec::new()

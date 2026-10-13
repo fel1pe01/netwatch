@@ -336,14 +336,16 @@ async fn test_incomplete_topology() -> Result<()> {
 
     let hypotheses = analyzer.analyze(since, Some(until)).await?;
 
-    // Should generate hypotheses for both
+    // Should generate hypotheses for both root causes:
+    // - gateway-known (upstream cause of device-known)
+    // - device-unknown (no upstream, is root cause itself)
     assert_eq!(hypotheses.len(), 2);
-    // device-known should have gateway as upstream cause
-    let known_hyp = hypotheses
+    // gateway-known should be identified as root cause for device-known
+    let gateway_hyp = hypotheses
         .iter()
-        .find(|h| h.entity_id == "device-known")
+        .find(|h| h.entity_id == "gateway-known")
         .unwrap();
-    assert!(!known_hyp.dependency_path.is_empty());
+    assert!(!gateway_hyp.dependency_path.is_empty());
     // device-unknown should have no upstream (no gateway info)
     let unknown_hyp = hypotheses
         .iter()

@@ -184,6 +184,7 @@ pub async fn hypothesis_detail_handler(
                 confirmed: incident.root_cause_confirmed,
                 confirmed_by: incident.root_cause_confirmed_by,
                 confirmed_at: incident.root_cause_confirmed_at,
+                is_root_cause: incident.root_cause_confirmed,
             };
             Json(json!(hypothesis))
         }

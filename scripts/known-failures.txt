@@ -1,0 +1,3 @@
+# Tests que fallan actualmente y están documentados en docs/checkpoints/CHECKPOINT_P4.md.
+# Un nombre por línea. check.sh los marca como [conocido]; cualquier otro fallo sale como [NUEVO].
+# Borra cada línea cuando el test se arregle: esta lista nunca debe crecer sin documentarlo.
