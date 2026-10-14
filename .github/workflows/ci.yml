@@ -5,33 +5,42 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Semanal: detecta advisories nuevos aunque no haya cambios de código.
+    - cron: "0 6 * * 1"
 
 permissions:
   contents: read
 
+# Cancela ejecuciones anteriores de la misma rama/PR.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Fija aquí la versión exacta que imprime check.sh ("Toolchain: rustc X.Y.Z")
+  # para que local y CI usen los mismos lints de clippy.
+  RUST_TOOLCHAIN: stable
+
 jobs:
   check:
-    name: Check (fmt, clippy, build, test)
+    name: Check (fmt, clippy, test, release)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
         run: |
@@ -42,46 +51,39 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Build
-        run: cargo build --all-targets --all-features
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
 
       - name: Run tests
-        run: cargo test --all-features
+        run: cargo test --locked --all-targets --all-features --no-fail-fast
+
+      - name: Run doc tests
+        run: cargo test --locked --doc --all-features
 
       - name: Build release
-        run: cargo build --release
+        run: cargo build --locked --release
 
   security:
     name: Security audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v4
+        uses: dtolnay/rust-toolchain@master
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      # Binarios precompilados: evita compilar cargo-audit y cargo-deny en cada ejecución.
+      - name: Install cargo-audit and cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
 
+      # Lee .cargo/audit.toml (ignores justificados), igual que en local.
       - name: Run security audit
         run: cargo audit
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
 
       - name: Run dependency checks
         run: cargo deny check advisories bans licenses sources
@@ -89,32 +91,27 @@ jobs:
   e2e:
     name: E2E smoke test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: check
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        uses: Swatinem/rust-cache@v2
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libsqlite3-dev pkg-config iproute2
+          sudo apt-get install -y libsqlite3-dev pkg-config iproute2 iputils-ping jq curl python3
 
       - name: Build release
-        run: cargo build --release
+        run: cargo build --locked --release
 
       - name: Run E2E smoke test
         run: ./scripts/e2e_smoke.sh
@@ -122,6 +119,7 @@ jobs:
   docker:
     name: Docker build validation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,7 +128,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false

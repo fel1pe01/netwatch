@@ -91,6 +91,21 @@ curl -X POST http://localhost:8080/api/v1/monitor/ping -H "Content-Type: applica
 curl http://localhost:8080/metrics
 ```
 
+## Security & Dependency Status
+
+All known vulnerabilities have been addressed as of 2026-10-13:
+
+| Advisory | Dependency | Resolution |
+|----------|------------|------------|
+| RUSTSEC-2024-0363 | sqlx 0.7.4 → 0.8.6 | Updated; mysql/postgres features disabled via `default-features = false` |
+| RUSTSEC-2024-0437 | protobuf 2.28.0 → 3.7.2 | Updated via prometheus 0.14.0 |
+| RUSTSEC-2024-0436 | paste 1.0.15 | Removed (no longer transitive) |
+| RUSTSEC-2025-0134 | rustls-pemfile 2.2.0 | Removed via rustls-native-certs 0.8.5 |
+| RUSTSEC-2024-0449 | unsafe-libyaml (via serde_yaml) | Replaced with maintained `yaml_serde` 0.10.7 |
+| RUSTSEC-2023-0071 | rsa 0.9.10 (via sqlx-mysql) | **Exception** — sqlx-mysql not enabled (mysql feature disabled) |
+
+Validation: `cargo audit` passes with one documented exception; `cargo deny` passes.
+
 ## Documentation
 
 - [Roadmap & Phases](docs/ROADMAP.md) — 16 objectives, priorities, dependencies, acceptance criteria
@@ -109,6 +124,54 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo build --release
 ./scripts/e2e_smoke.sh
 ```
+
+## Pre-push Validation (Local CI Replica)
+
+The repository includes `scripts/check.sh`, a comprehensive validation script that mirrors the CI pipeline. Run it before pushing:
+
+```bash
+./scripts/check.sh
+```
+
+### Docker Validation Behavior
+
+The Docker step in `check.sh` automatically manages the `netwatch:check` validation image:
+
+- **Image exists**: Deletes it first, then rebuilds from scratch with `docker build --pull -t netwatch:check .`
+- **Image absent**: Builds directly
+- **Build failure**: Recorded as FAIL in the summary with the build log shown
+- **Cleanup**: The validation image is removed after the check (best-effort)
+
+This ensures the Docker build is always tested from a clean state, matching CI behavior.
+
+### Docker Desktop on WSL2
+
+For the Docker validation to work in WSL2:
+
+1. Install **Docker Desktop for Windows**
+2. Enable **WSL 2 integration** in Docker Desktop Settings → Resources → WSL Integration
+3. Ensure your Ubuntu distro is toggled on
+4. The `docker` CLI in WSL will then connect to the Docker Desktop daemon
+
+If Docker is unavailable or you want to skip the Docker build:
+
+```bash
+./scripts/check.sh --skip-docker
+```
+
+This records an explicit skip (exit code 0) and does not mark the validation as incomplete.
+
+### Validation Modes
+
+| Mode | Command | Exit Code | Use Case |
+|------|---------|-----------|----------|
+| Full (pre-push) | `./scripts/check.sh` | 0=pass, 1=fail, 3=incomplete | Default; runs everything from clean |
+| Quick iteration | `./scripts/check.sh --quick` | 3 (incomplete) | fmt, check, test, clippy only |
+| Skip Docker | `./scripts/check.sh --skip-docker` | 0/1/3 | No Docker / WSL without Docker Desktop |
+| Skip security | `./scripts/check.sh --skip-audit` | 0/1/3 | No cargo-audit/deny installed |
+| Skip E2E | `./scripts/check.sh --skip-e2e` | 0/1/3 | No release binary / slow environment |
+
+See `./scripts/check.sh --help` for all options.
 
 ## License
 

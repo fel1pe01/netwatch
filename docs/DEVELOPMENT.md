@@ -86,7 +86,7 @@ All core functionality is split into small, single‑purpose modules.
 cargo test
 ```
 
-The tests include (46 tests passing):
+The tests include (91 tests passing):
 - Configuration parsing (5 tests).
 - SQLite migration and basic queries (2 tests).
 - Scheduler behaviour (job scheduling, timeout, concurrency) — in integration_test.rs.
@@ -98,8 +98,12 @@ The tests include (46 tests passing):
 - CLI integration tests (6 tests).
 - Metrics handler (1 test).
 - Drift detection (5 tests).
+- Anomaly detection (13 tests).
+- Capacity planning (11 tests).
+- Incident management (12 tests).
+- Root cause analysis (8 tests).
 
-Total: 46 unit/integration tests + 42 E2E smoke test checks.
+Total: 91 unit/integration tests + 42 E2E smoke test checks.
 
 ## Building for release
 
@@ -116,6 +120,15 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
+## Security Validation
+
+```bash
+cargo audit
+cargo deny check advisories bans licenses sources
+```
+
+Both commands pass. One advisory (RUSTSEC-2023-0071) is documented as an exception — see [CHANGES_MADE.md](docs/CHANGES_MADE.md) for justification.
+
 ## E2E Smoke Test
 
 ```bash
@@ -123,6 +136,54 @@ cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Runs 42 checks against the release binary (5 CLI, 12 HTTP, 10 metrics, 4 drift, 11 topology).
+
+## Pre-push Validation (Local CI Replica)
+
+The repository includes `scripts/check.sh`, a comprehensive validation script that mirrors the CI pipeline. Run it before pushing:
+
+```bash
+./scripts/check.sh
+```
+
+### Docker Validation Behavior
+
+The Docker step in `check.sh` automatically manages the `netwatch:check` validation image:
+
+- **Image exists**: Deletes it first, then rebuilds from scratch with `docker build --pull -t netwatch:check .`
+- **Image absent**: Builds directly
+- **Build failure**: Recorded as FAIL in the summary with the build log shown
+- **Cleanup**: The validation image is removed after the check (best-effort)
+
+This ensures the Docker build is always tested from a clean state, matching CI behavior.
+
+### Docker Desktop on WSL2
+
+For the Docker validation to work in WSL2:
+
+1. Install **Docker Desktop for Windows**
+2. Enable **WSL 2 integration** in Docker Desktop Settings → Resources → WSL Integration
+3. Ensure your Ubuntu distro is toggled on
+4. The `docker` CLI in WSL will then connect to the Docker Desktop daemon
+
+If Docker is unavailable or you want to skip the Docker build:
+
+```bash
+./scripts/check.sh --skip-docker
+```
+
+This records an explicit skip (exit code 0) and does not mark the validation as incomplete.
+
+### Validation Modes
+
+| Mode | Command | Exit Code | Use Case |
+|------|---------|-----------|----------|
+| Full (pre-push) | `./scripts/check.sh` | 0=pass, 1=fail, 3=incomplete | Default; runs everything from clean |
+| Quick iteration | `./scripts/check.sh --quick` | 3 (incomplete) | fmt, check, test, clippy only |
+| Skip Docker | `./scripts/check.sh --skip-docker` | 0/1/3 | No Docker / WSL without Docker Desktop |
+| Skip security | `./scripts/check.sh --skip-audit` | 0/1/3 | No cargo-audit/deny installed |
+| Skip E2E | `./scripts/check.sh --skip-e2e` | 0/1/3 | No release binary / slow environment |
+
+See `./scripts/check.sh --help` for all options.
 
 ## Configuration
 

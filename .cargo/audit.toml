@@ -1,0 +1,11 @@
+# .cargo/audit.toml  (cargo audit lo lee solo)
+[advisories]
+ignore = [
+  # rsa solo entra vía sqlx-macros-core -> sqlx-mysql; el feature mysql no está activo.
+  # sqlx se configura con default-features = false y solo features = ["sqlite", "runtime-tokio", "macros", "migrate"]
+  # El feature "mysql" (que trae sqlx-mysql -> rsa) NO está activado.
+  # Verificado: cargo build NO compila sqlx-mysql ni rsa.
+  # Riesgo: CERO — el código vulnerable no está presente en el binario final.
+  # Ver docs/CHANGES_MADE.md para justificación completa.
+  "RUSTSEC-2023-0071",
+]

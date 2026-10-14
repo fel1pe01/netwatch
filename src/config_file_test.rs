@@ -124,7 +124,7 @@ agent:
     fs::write(&config_path, yaml_content).unwrap();
 
     let result = Config::from_path(&config_path);
-    // serde_yaml will fail if required fields are missing
+    // yaml_serde will fail if required fields are missing
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("Failed to parse YAML") || err.contains("missing field"));

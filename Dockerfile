@@ -1,13 +1,14 @@
 # Build stage
-FROM rust:1.79-bookworm AS builder
+FROM rust:1.99.0-bookworm AS builder
 
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libssl-dev \
-    libsqlite3-dev \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libsqlite3-0 \
+    iputils-ping \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifests
@@ -22,23 +23,29 @@ RUN rm -rf src
 COPY src ./src
 COPY migrations ./migrations
 
-# Build application
-RUN cargo build --release
+# Build the actual application
+RUN cargo build --locked --release
 
 # Runtime stage
 FROM debian:bookworm-slim AS runtime
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies, including wget for HEALTHCHECK
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libsqlite3-0 \
     iputils-ping \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
-RUN useradd -r -s /bin/false -u 1000 -g 1000 netwatch
+RUN groupadd --gid 1000 netwatch \
+    && useradd --uid 1000 \
+       --gid netwatch \
+       --no-create-home \
+       --shell /usr/sbin/nologin \
+       netwatch
 
-# Create data directory
+# Persistent compiled binary
 RUN mkdir -p /data && chown netwatch:netwatch /data
 
 # Copy binary from builder

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use yaml_serde;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentConfig {
@@ -161,7 +162,7 @@ impl Config {
     pub fn from_path(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Could not read config at {}", path.display()))?;
-        let mut cfg: Config = serde_yaml::from_str(&content)
+        let mut cfg: Config = yaml_serde::from_str(&content)
             .with_context(|| format!("Failed to parse YAML at {}", path.display()))?;
 
         // Override with environment variables if present
