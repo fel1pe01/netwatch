@@ -1,10 +1,10 @@
 # Auditoría Integral del Repositorio Netwatch
 
-**Fecha:** 2026-10-18  
-**Auditor:** Análisis automatizado con verificación cruzada código-documentación-Git  
-**Repositorio:** `~/projects/netwatch` (local) → `https://github.com/fel1pe01/netwatch` (remoto)  
-**Commit analizado:** `27dcdb8` (HEAD, main, up-to-date con origin/main)  
-**Rama:** main  
+**Fecha:** 2026-10-18
+**Auditor:** Análisis automatizado con verificación cruzada código-documentación-Git
+**Repositorio:** `~/projects/netwatch` (local) → `https://github.com/fel1pe01/netwatch` (remoto)
+**Commit analizado:** `27dcdb8` (HEAD, main, up-to-date con origin/main)
+**Rama:** main
 **Estado del árbol de trabajo:** Limpio (sin cambios pendientes)
 
 ---
@@ -105,7 +105,7 @@ netwatch/
 - **Problema:** La documentación afirma repetidamente que los tests pasan, pero **explicitamente marca como "historical" / "not re-verified this session"** debido a toolchain issue (`dlltool.exe` missing). El estado real de los tests es **desconocido** en el commit actual.
 - **Evidencia:** CHECKPOINT_P4.md líneas 74-104 documenta: "Tests could not be executed in this session due to a toolchain issue: the GNU (MinGW) toolchain is missing `dlltool.exe`". `cargo fmt --check` pasó en corrective review (2026-10-13), pero clippy/test/build bloqueados.
 - **Impacto:** Usuarios/desarrolladores pueden asumir que la suite de tests pasa actualmente cuando no se ha verificado. CI remoto (GitHub Actions) sí ejecuta tests — pero localmente no hay confirmación reciente.
-- **Corrección recomendada:** 
+- **Corrección recomendada:**
   1. Mantener etiqueta "historical / not re-verified" en todos los documentos (ya presente).
   2. Resolver toolchain issue (instalar MinGW o MSVC target) y re-ejecutar `./scripts/check.sh` completo.
   3. Actualizar contadores si resultados difieren.
@@ -149,7 +149,7 @@ netwatch/
 - **Problema:** La documentación afirma que existe endpoint `/api/v1/capacity/report`. En `src/api.rs` **no hay ruta** para `/api/v1/capacity/report`. El CLI `netwatch capacity report` **sí existe** (main.rs líneas 525-538) y funciona standalone (crea su propio Storage).
 - **Evidencia:** `api.rs` líneas 217-240: router define rutas para `/health`, `/devices`, `/vlans`, `/subnets`, `/gateways`, `/events`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp`, `/topology`, `/incidents/hypotheses*`. **No hay `/capacity/report`**.
 - **Impacto:** Usuario intenta llamar API `/api/v1/capacity/report` y recibe 404. Solo CLI funciona.
-- **Corrección recomendada:** 
+- **Corrección recomendada:**
   1. Implementar endpoint en `api.rs` (añadir handler + route) que use `CapacityPlanner` compartido.
   2. O actualizar documentación: "Solo CLI disponible; API endpoint pendiente".
 
@@ -202,7 +202,7 @@ netwatch/
 - **Problema:** Config define `metrics.path` para base de datos separada de métricas. En código, `Storage::connect()` usa `config.storage.path` (único). `metrics.path` **nunca se lee ni usa**. `AppMetrics` usa `prometheus::default_registry()` en memoria, no SQLite.
 - **Evidencia:** `config.rs` línea 18-21 define `MetricsConfig { enabled, path }`. `main.rs` línea 548 usa `config.storage.path`. `metrics.rs` no accede a config.
 - **Impacto:** Configuración muerta. Usuario configura path inútil. Confusión sobre arquitectura de métricas.
-- **Corrección recomendada:** 
+- **Corrección recomendada:**
   1. Remover `metrics.path` de `Config` y `config.example.yaml` si no se usa.
   2. O implementar persistencia de métricas en SQLite (si es objetivo) y usar `metrics.path`.
   3. Documentar que métricas Prometheus son in-memory/ephemeral (salvo Prometheus externo scrapeando).
@@ -235,7 +235,7 @@ netwatch/
 - **Problema:** Alertmanager config define 4 receivers apuntando a `http://netwatch:8080/api/v1/alerts/webhook`. En `src/api.rs` **no existe** ruta `/api/v1/alerts/webhook`. Router no la registra.
 - **Evidencia:** `api.rs` líneas 217-240: rutas definidas. No hay `/alerts/webhook`. `main.rs` no registra handler para alerts.
 - **Impacto:** Si Alertmanager dispara alerta, webhook falla 404. Stack observabilidad "Partial — stack deployment untested" (README línea 18).
-- **Corrección recomendada:** 
+- **Corrección recomendada:**
   1. Implementar endpoint `/api/v1/alerts/webhook` en `api.rs` para recibir Alertmanager webhooks.
   2. O actualizar alertmanager.yml a endpoint que exista (ej. `/api/v1/incidents/webhook` si se implementa).
   3. Documentar que Alertmanager integration está en config pero endpoint faltante.
