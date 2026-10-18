@@ -129,15 +129,17 @@
 - `Scheduler` struct with job queue, worker pool, semaphore-based concurrency
 - `Job` struct with name, interval, async task (`BoxFuture`)
 - Graceful shutdown via `tokio::sync::Notify`
-- **RUNNING** — instantiated in `main.rs:535`, 6 jobs registered, runs in background tokio task
+- **RUNNING** — instantiated in `main()` via `Scheduler::new()`, 6 jobs registered in `register_monitoring_jobs()`, runs in background tokio task
 
-**Registered Jobs (from `main.rs:538-586`):**
-1. `health_check_icmp` — ICMP ping to 127.0.0.1
-2. `health_check_http` — HTTP GET to http://127.0.0.1:8080/health
-3. `health_check_dns` — DNS A record for localhost
-4. `health_check_tls` — TLS check on localhost:8080
+**Registered Jobs (from `register_monitoring_jobs()` in `main.rs`):**
+1. `health_check_icmp` — ICMP ping to 127.0.0.1 (hardcoded)
+2. `health_check_http` — HTTP GET to http://127.0.0.1:8080/health (hardcoded)
+3. `health_check_dns` — DNS A record for localhost (hardcoded)
+4. `health_check_tls` — TLS check on localhost:8080 (hardcoded)
 5. `topology_discovery` — Build topology from discovery + create snapshot
 6. `snmp_poll` — Placeholder (logs debug, no real polling)
+
+**Note:** All health check targets are hardcoded to localhost/127.0.0.1. Per-device/service scheduling requires inventory (Objective 5) and is planned for P1+.
 
 ### 1.13 Events
 
@@ -375,7 +377,7 @@ graph TB
 - **Structs:** `Job`, `Scheduler`
 - **Methods:** `new()`, `add_job()`, `run()`, `shutdown()`
 - **Concurrency:** Semaphore-limited worker pool
-- **Status:** **RUNNING** — instantiated in main.rs, 6 jobs, background task, graceful shutdown
+- **Status:** **RUNNING** — instantiated in `main()` via `Scheduler::new()`, 6 jobs registered in `register_monitoring_jobs()`, background task, graceful shutdown
 
 ### 3.15 `src/events.rs` — Event Bus (312 lines)
 - **Struct:** `EventBus { sender: Sender<Event> }`

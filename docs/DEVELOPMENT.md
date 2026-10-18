@@ -86,7 +86,7 @@ All core functionality is split into small, single‑purpose modules.
 cargo test
 ```
 
-The tests include (91 tests passing):
+The tests include (91 tests passing in last verified run):
 - Configuration parsing (5 tests).
 - SQLite migration and basic queries (2 tests).
 - Scheduler behaviour (job scheduling, timeout, concurrency) — in integration_test.rs.
@@ -102,6 +102,10 @@ The tests include (91 tests passing):
 - Capacity planning (11 tests).
 - Incident management (12 tests).
 - Root cause analysis (8 tests).
+
+**Note on test counts:** The "91 tests" above includes all unit and integration tests across all test files (46 base tests + 13 anomaly + 11 capacity + 12 incident + 8 root cause + 1 metrics handler = ~91). Other documents may reference "46 unit/integration tests" as the core suite excluding the newer P4 test modules (anomaly, capacity, incident, root_cause). Both counts are correct for different categorizations.
+
+**Test verification status:** Tests were last fully verified on 2026-10-13. Since then, `cargo test`, `cargo clippy`, and `cargo build --release` are blocked locally by a toolchain issue (missing `dlltool.exe` in the GNU/MinGW target on Windows). CI (GitHub Actions, Ubuntu/MSVC) executes the full suite on every push. Run `./scripts/check.sh --skip-audit --skip-docker --skip-e2e` for fmt/check only, or install MSVC target (`rustup target add x86_64-pc-windows-msvc`) to restore full local verification.
 
 Total: 91 unit/integration tests + 42 E2E smoke test checks.
 
@@ -197,10 +201,6 @@ agent:
 storage:
   path: "netwatch.sqlite"
 
-metrics:
-  enabled: true
-  path: "metrics.sqlite"
-
 api:
   enabled: true
 
@@ -214,17 +214,30 @@ discovery:
 health:
   interval: 15
 
-ports:
-  enabled: true
-  interval: 900
-
 snmp:
+  # NOT IMPLEMENTED — placeholder only; enabling has no effect
   enabled: false
   interval: 60
 
 scheduler:
   concurrency: 10
-  rate_limit: 1000
+
+capacity:
+  enabled: true
+  interval: 3600
+
+anomaly:
+  enabled: true
+  interval: 300
+  min_samples: 10
+  lookback_window_seconds: 3600
+  sensitivity: 1.0
+  min_z_score: 3.0
+  enable_spike_detection: true
+  enable_drift_detection: true
+  enable_pattern_break_detection: false
+  anomaly_cooldown_seconds: 300
+  min_absolute_change: 10.0
 ```
 
 Run with config:
@@ -236,3 +249,8 @@ Or use environment variables:
 ```bash
 NETWATCH_STORAGE_PATH=/data/netwatch.sqlite NETWATCH_LOG_LEVEL=debug ./target/release/netwatch
 ```
+
+**Note:** The following config sections from earlier versions are no longer used and have been removed:
+- `metrics.path` — Prometheus metrics use in-memory registry, not SQLite
+- `ports` — Port scanning not yet implemented (Obj 6)
+- `scheduler.rate_limit` — Only `concurrency` is used for job limiting

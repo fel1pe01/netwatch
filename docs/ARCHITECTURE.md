@@ -94,10 +94,10 @@ main()
   → EventBus created
   → Scheduler instantiated (concurrency from config)
   → register_monitoring_jobs():
-      - health_check_icmp (interval from config.health.interval)
-      - health_check_http
-      - health_check_dns
-      - health_check_tls
+      - health_check_icmp (interval from config.health.interval) — target: 127.0.0.1 (hardcoded)
+      - health_check_http (interval from config.health.interval) — target: http://127.0.0.1:8080/health (hardcoded)
+      - health_check_dns (interval from config.health.interval) — target: localhost (hardcoded)
+      - health_check_tls (interval from config.health.interval) — target: localhost:8080 (hardcoded)
       - topology_discovery (if config.discovery.enabled)
       - snmp_poll (if config.snmp.enabled, placeholder)
   → Each job:
@@ -111,6 +111,8 @@ main()
   → Scheduler runs in background tokio task
   → Graceful shutdown on SIGINT
 ```
+
+**Note:** Health check targets are currently hardcoded to localhost/127.0.0.1. Per-device/service scheduling requires inventory population (Objective 5) and is planned for P1+.
 
 #### Metrics Exposition
 ```

@@ -73,9 +73,11 @@ The following Python scripts are development/debugging artifacts and should **no
 
 **⚠️ NOTE:** Tests could not be executed in this session due to a toolchain issue: the GNU (MinGW) toolchain is missing `dlltool.exe`, preventing compilation of `getrandom` and `parking_lot_core` dependencies. The MSVC target is not installed. This is an environment limitation, not a code issue.
 
+**Update 2026-10-18 (Audit Follow-up):** Toolchain issue persists. `cargo fmt --check` passes. `cargo test`, `cargo clippy`, `cargo build --release` remain blocked. To restore local verification: install MinGW (providing `dlltool.exe`) or install MSVC target via `rustup target add x86_64-pc-windows-msvc` (requires `rustup` in PATH). CI (GitHub Actions, Ubuntu) executes full suite on push.
+
 ### Previously Reported Test State (from prior sessions)
 
-The following test results were reported from earlier successful runs but **have not been re-verified in this session**:
+The following test results were reported from earlier successful runs but **have not been re-verified since 2026-10-13**:
 
 | Test Suite | Reported Result | Notes |
 |------------|-----------------|-------|
@@ -326,4 +328,21 @@ This section documents corrections made after the initial checkpoint commit (f17
 
 ---
 
-*Checkpoint created as part of Netwatch P4 audit documentation. This document reflects the actual state of the working tree as of 2026-10-12 23:20 UTC.*
+## Audit Follow-up (2026-10-18)
+
+**Toolchain Status:** Unchanged — `dlltool.exe` still missing in GNU/MinGW target. `cargo fmt --check` passes. Full verification blocked locally. CI (GitHub Actions) executes complete suite on push.
+
+**Documentation Corrections Applied (this audit):**
+- Fixed test status references across docs to clarify "not re-verified since 2026-10-13"
+- Removed obsolete "Known Limitations" entries (IncidentEngine now wired, SLA/SLO calculations partially implemented)
+- Fixed line number references (`main.rs:535` → function references)
+- Clarified SNMP config as placeholder only in `config.example.yaml` and `DEVELOPMENT.md`
+- Corrected capacity report endpoint documentation (CLI only, API not implemented)
+- Removed unused config sections (`metrics.path`, `ports`, `scheduler.rate_limit`) from `config.example.yaml`
+- Documented health checks limited to localhost in `ARCHITECTURE.md` and `ARCHITECTURE_AND_FUNCTIONAL_TESTS.md`
+- Explained test count discrepancy (91 vs 46+42) in `DEVELOPMENT.md`
+- Added alertmanager webhook endpoint missing note in `IMPLEMENTATION_STATUS.md`
+
+---
+
+*Checkpoint created as part of Netwatch P4 audit documentation. This document reflects the actual state of the working tree as of 2026-10-12 23:20 UTC. Audit follow-up added 2026-10-18.*

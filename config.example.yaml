@@ -8,10 +8,6 @@ agent:
 storage:
   path: "/data/netwatch.sqlite"
 
-metrics:
-  enabled: true
-  path: "/data/metrics.sqlite"
-
 api:
   enabled: true
 
@@ -25,17 +21,13 @@ discovery:
 health:
   interval: 15
 
-ports:
-  enabled: true
-  interval: 900
-
 snmp:
+  # NOT IMPLEMENTED — placeholder only; enabling has no effect
   enabled: false
   interval: 60
 
 scheduler:
   concurrency: 10
-  rate_limit: 1000
 
 capacity:
   enabled: true

@@ -443,7 +443,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 ### Acceptance Criteria
 - [x] Trend computed from last 30d of utilization samples — **Using latency data; SNMP utilization pending Objective 5**
 - [x] Projection includes: model type, R², assumption (linear growth) — `TrendAnalysis` in `capacity_planning.rs:60-92`
-- [x] Report generated via CLI/API, includes uncertainty disclaimer — `netwatch capacity report` + `/api/v1/capacity/report`; markdown/JSON
+- [x] Report generated via CLI, includes uncertainty disclaimer — `netwatch capacity report` (CLI only; API endpoint `/api/v1/capacity/report` not yet implemented); markdown/JSON
 - [ ] Unit test: synthetic linear growth → predicted date within 10% — **Implementation complete; unit tests pending**
 
 ### Additional Implemented Features (Checkpoint 2026-10-12)

@@ -41,7 +41,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
-| Periodic check execution | ✅ | `Scheduler` instantiated in `main.rs:535`; health check jobs registered at `main.rs:538, 547, 561, 575`; runs every `config.health.interval` seconds |
+| Periodic check execution | ✅ | `Scheduler` instantiated in `main()` via `Scheduler::new()`; health check jobs registered in `register_monitoring_jobs()`; runs every `config.health.interval` seconds |
 | Check persistence | ✅ | `persist_observation()` at `main.rs:367-396` writes to `observations` table; verified by integration test |
 | Availability calculation | ✅ | `Storage::get_availability_stats()` in `storage.rs:140-170` computes `successful/total` per window |
 | Latency percentiles (p50/p95/p99) | ✅ | `Storage::compute_percentile()` in `storage.rs:115-138` computes from raw observations |
@@ -414,7 +414,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 |------|--------|---------|
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
 | **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB); percentile/availability queries added |
-| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main.rs:535`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP, anomaly detection, capacity planning; runs in background with semaphore pool; graceful shutdown on SIGINT |
+| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main()` via `Scheduler::new()`; registers health check jobs (ICMP, HTTP, DNS, TLS), topology, SNMP, anomaly detection, capacity planning; runs in background with semaphore pool; graceful shutdown on SIGINT |
 | **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; `IncidentEngine` consumes events and manages incidents |
 | **Metrics** | **Implemented** | AppMetrics + health check metrics; cardinality enforced; uptime works |
 | **Discovery** | **Implemented** | Interfaces + routes; Linux-only; one-shot (not incremental) |
@@ -444,7 +444,7 @@ The following P0 criteria have been verified:
 |-----------|--------|----------|
 | Config initializes correctly | ✅ | `--config` flag loads YAML; defaults used when absent; env overrides work |
 | Storage initializes and migrations run | ✅ | `Storage::connect()` in `main.rs:518`; tables created |
-| Scheduler connects to app lifecycle | ✅ | Instantiated at `main.rs:535`, jobs registered at `main.rs:538-586`, runs in background task |
+| Scheduler connects to app lifecycle | ✅ | Instantiated in `main()`, jobs registered in `register_monitoring_jobs()`, runs in background task |
 | Configured checks execute periodically | ✅ | Health check jobs run every `config.health.interval` seconds |
 | Results stored verifiably | ✅ | `persist_observation()` writes to `observations` table; integration test confirms |
 | Errors not silented | ✅ | Errors logged via `tracing::error!`; failed checks recorded with `success=false` |
@@ -485,7 +485,7 @@ cargo build --release
 ./scripts/e2e_smoke.sh
 ```
 
-**Last Verified:** Historical (prior session); commands not re-executed in corrective review due to toolchain issue (missing `dlltool.exe`). `cargo fmt --check` passed in corrective review (2026-10-13).
+**Last Verified:** 2026-10-13 (corrective review); `cargo fmt --check` passed. `cargo test`, `cargo clippy`, `cargo build --release`, `./scripts/e2e_smoke.sh` blocked by toolchain issue (missing `dlltool.exe` in GNU/MinGW target on Windows). CI (GitHub Actions, Ubuntu/MSVC) executes full suite on push.
 
 ---
 
@@ -500,8 +500,13 @@ cargo build --release
 | ICMP requires `ping` binary | `src/monitoring/icmp.rs:12` |
 | Placeholder endpoints | `src/api.rs:148-156` |
 | SNMP collector placeholder | `src/main.rs:567-586` |
-| No incident engine consuming events | `src/events.rs` emitters exist but no subscribers create incidents |
-| No SLA/SLO calculations | `src/storage.rs` no availability/percentile queries |
+| No detector registry | `src/anomaly.rs` no per-rule/entity enable/disable |
+| No false positive tracking | `src/anomaly.rs` no operator feedback loop |
+| No confidence intervals for capacity projections | `src/capacity_planning.rs` `confidence_level` stored but unused |
+| Health checks limited to localhost | `src/main.rs` hardcoded targets in `register_monitoring_jobs()` |
+| Single `health.interval` for all protocols | `src/main.rs` no per-protocol interval config |
+| Alertmanager webhook endpoint not implemented | `alertmanager/alertmanager.yml` references `/api/v1/alerts/webhook` |
+| Capacity report API endpoint not implemented | Only CLI `netwatch capacity report` available |
 
 ---
 

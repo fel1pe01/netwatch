@@ -63,8 +63,8 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Discovery (interfaces/routes) | ✅ Implemented | Linux `/sys/class/net` + `/proc/net/route` |
 | Topology builder | ✅ Implemented | Graph from discovery + SNMP; Mermaid/DOT/JSON export |
 | Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export |
-| Test suite | ⚠️ 46 tests passing (historical) | Unit, integration, CLI, HTTP, metrics cardinality, drift — **not re-verified this session** |
-| E2E smoke test | ⚠️ 42/42 passing (historical) | `scripts/e2e_smoke.sh` — **not re-verified this session** |
+| Test suite | ⚠️ 46 tests passing (historical) | Unit, integration, CLI, HTTP, metrics cardinality, drift — **not re-verified since 2026-10-13** (blocked by toolchain: missing `dlltool.exe` in GNU target) |
+| E2E smoke test | ⚠️ 42/42 passing (historical) | `scripts/e2e_smoke.sh` — **not re-verified since 2026-10-13** (requires release binary; blocked by toolchain) |
 
 **Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, no detector registry, no false positive tracking, no confidence intervals for capacity projections.
 
