@@ -28,6 +28,7 @@ snmp:
 
 scheduler:
   concurrency: 10
+  rate_limit: 1000
 
 capacity:
   enabled: true
@@ -46,6 +47,103 @@ anomaly:
   anomaly_cooldown_seconds: 300
   min_absolute_change: 10.0
 
+alert:
+  enabled: true
+  interval: 60
+  rules:
+    # Example alert rules:
+    # - id: "icmp_down"
+    #   name: "ICMP Check Down"
+    #   description: "Alert when ICMP check fails"
+    #   enabled: true
+    #   entity_type: "device"
+    #   protocol: "icmp"
+    #   condition:
+    #     type: "down"
+    #   severity: "critical"
+    #   cooldown_seconds: 300
+    #   labels:
+    #     team: "network"
+    #
+    # - id: "http_latency_high"
+    #   name: "HTTP Latency High"
+    #   description: "Alert when HTTP latency exceeds threshold"
+    #   enabled: true
+    #   entity_type: "service"
+    #   protocol: "http"
+    #   condition:
+    #     type: "latency_threshold"
+    #     threshold_ms: 5000
+    #   severity: "warning"
+    #   cooldown_seconds: 300
+    #   labels:
+    #     team: "web"
+    #
+    # - id: "dns_failure_rate"
+    #   name: "DNS Failure Rate"
+    #   description: "Alert when DNS failure rate exceeds 10%"
+    #   enabled: true
+    #   entity_type: "service"
+    #   protocol: "dns"
+    #   condition:
+    #     type: "failure_rate"
+    #     threshold: 0.1
+    #     window_seconds: 300
+    #   severity: "warning"
+    #   cooldown_seconds: 300
+    #   labels:
+    #     team: "network"
+
+synthetic_checks:
+  enabled: true
+  interval: 60
+  checks:
+    # Example synthetic checks:
+    # - id: "web_frontend"
+    #   name: "Web Frontend HTTP Check"
+    #   check_type: "http"
+    #   target: "example.com"
+    #   expected_status: 200
+    #   expected_body: "Welcome"
+    #   timeout_ms: 5000
+    #   enabled: true
+    #
+    # - id: "api_health"
+    #   name: "API Health HTTPS Check"
+    #   check_type: "https"
+    #   target: "api.example.com/health"
+    #   expected_status: 200
+    #   headers:
+    #     - ["Authorization", "Bearer ${API_TOKEN}"]
+    #   timeout_ms: 5000
+    #   enabled: true
+    #
+    # - id: "dns_resolution"
+    #   name: "DNS Resolution Check"
+    #   check_type: "dns"
+    #   target: "example.com"
+    #   record_type: "A"
+    #   timeout_ms: 5000
+    #   enabled: true
+    #
+    # - id: "tcp_port_443"
+    #   name: "TCP Port 443 Check"
+    #   check_type: "tcp"
+    #   target: "example.com"
+    #   port: 443
+    #   timeout_ms: 5000
+    #   enabled: true
+    #
+    # - id: "tls_cert_expiry"
+    #   name: "TLS Certificate Expiry Check"
+    #   check_type: "tls"
+    #   target: "example.com"
+    #   port: 443
+    #   check_expiry_days: 30
+    #   verify_hostname: true
+    #   timeout_ms: 5000
+    #   enabled: true
+
 # SNMP credentials (use environment variables for secrets)
 # snmp_v3_users:
 #   - username: "netwatch"
@@ -55,10 +153,14 @@ anomaly:
 #     priv_password: "${SNMP_PRIV_PASSWORD}"
 
 # Telegram notifications (use environment variables for secrets)
-# telegram:
-#   enabled: true
-#   bot_token: "${TELEGRAM_BOT_TOKEN}"
-#   chat_id: "${TELEGRAM_CHAT_ID}"
+telegram:
+  enabled: false
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
+  parse_mode: "HTML"
+  timeout_seconds: 10
+  max_retries: 3
+  retry_backoff_seconds: 5
 
 # Kafka configuration (optional)
 # kafka:

@@ -3,10 +3,11 @@ use axum::serve;
 use axum::{routing::get, Router};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
+use netwatch::alerts::{AlertEngine, AlertEngineConfig};
 use netwatch::anomaly::{AnomalyConfig as AnomalyDetectorConfig, AnomalyDetector};
 use netwatch::api::router as api_router;
 use netwatch::capacity_planning::{CapacityConfig, CapacityPlanner};
-use netwatch::config::Config;
+use netwatch::config::{Config, SyntheticCheckType};
 use netwatch::discovery::interfaces::discover_interfaces;
 use netwatch::discovery::routing::discover_routes;
 use netwatch::events::{CheckEvidence, EntityType, EventBus};
@@ -88,11 +89,195 @@ async fn register_monitoring_jobs(
     use netwatch::monitoring::{check_dns, check_http, check_tls, ping};
     use std::time::Duration;
 
-    // ICMP health check job (P0)
-    if config.health.interval > 0 {
+    // Register synthetic checks from config
+    if config.synthetic_checks.enabled.unwrap_or(true) {
+        let interval = Duration::from_secs(config.synthetic_checks.interval.unwrap_or(60));
+
+        for check in &config.synthetic_checks.checks {
+            if !check.enabled {
+                continue;
+            }
+
+            let storage = storage.clone();
+            let event_bus = event_bus.clone();
+            let check_config = check.clone();
+            let job_name = format!("synthetic_check_{}", check.id);
+
+            let job = netwatch::scheduler::Job {
+                name: job_name.clone(),
+                interval,
+                task: Arc::new(move || {
+                    let storage = storage.clone();
+                    let event_bus = event_bus.clone();
+                    let check = check_config.clone();
+                    Box::pin(async move {
+                        let (res, proto) =
+                            match check.check_type {
+                                SyntheticCheckType::Http | SyntheticCheckType::Https => {
+                                    let url = if check.check_type == SyntheticCheckType::Https {
+                                        format!("https://{}", check.target)
+                                    } else {
+                                        format!("http://{}", check.target)
+                                    };
+                                    let timeout = check.timeout_ms.unwrap_or(5000);
+                                    let expected_status = check.expected_status;
+                                    let expected_body = check.expected_body.clone();
+                                    let headers = check.headers.clone().unwrap_or_default();
+                                    let res = check_http(
+                                        &url,
+                                        timeout,
+                                        expected_status,
+                                        expected_body,
+                                        Some(headers),
+                                    )
+                                    .await
+                                    .unwrap_or_else(|e| HealthCheckResult {
+                                        target: url.clone(),
+                                        protocol:
+                                            if check.check_type == SyntheticCheckType::Https {
+                                                "https"
+                                            } else {
+                                                "http"
+                                            }
+                                            .to_string(),
+                                        timestamp: Utc::now(),
+                                        success: false,
+                                        latency_ms: None,
+                                        error: Some(e.to_string()),
+                                        observed_at: Utc::now(),
+                                        timeout_ms: timeout,
+                                        evidence: "http_probe".to_string(),
+                                    });
+                                    (
+                                        res,
+                                        if check.check_type == SyntheticCheckType::Https {
+                                            "https"
+                                        } else {
+                                            "http"
+                                        }
+                                        .to_string(),
+                                    )
+                                }
+                                SyntheticCheckType::Dns => {
+                                    let timeout = check.timeout_ms.unwrap_or(5000);
+                                    let record_type = check.record_type.clone();
+                                    let res = check_dns(&check.target, record_type, None, timeout)
+                                        .await
+                                        .unwrap_or_else(|e| HealthCheckResult {
+                                            target: format!("{} (DNS)", check.target),
+                                            protocol: "dns".to_string(),
+                                            timestamp: Utc::now(),
+                                            success: false,
+                                            latency_ms: None,
+                                            error: Some(e.to_string()),
+                                            observed_at: Utc::now(),
+                                            timeout_ms: timeout,
+                                            evidence: "dns_probe".to_string(),
+                                        });
+                                    (res, "dns".to_string())
+                                }
+                                SyntheticCheckType::Tcp => {
+                                    let port = check.port.unwrap_or(80);
+                                    let timeout = check.timeout_ms.unwrap_or(5000);
+                                    let res = check_tcp(&check.target, port, timeout)
+                                        .await
+                                        .unwrap_or_else(|e| HealthCheckResult {
+                                            target: format!("{}:{}", check.target, port),
+                                            protocol: "tcp".to_string(),
+                                            timestamp: Utc::now(),
+                                            success: false,
+                                            latency_ms: None,
+                                            error: Some(e.to_string()),
+                                            observed_at: Utc::now(),
+                                            timeout_ms: timeout,
+                                            evidence: "tcp_probe".to_string(),
+                                        });
+                                    (res, "tcp".to_string())
+                                }
+                                SyntheticCheckType::Tls => {
+                                    let port = check.port.unwrap_or(443);
+                                    let timeout = check.timeout_ms.unwrap_or(5000);
+                                    let check_expiry_days = check.check_expiry_days;
+                                    let verify_hostname = check.verify_hostname.unwrap_or(true);
+                                    let res = check_tls(
+                                        &check.target,
+                                        port,
+                                        timeout,
+                                        check_expiry_days,
+                                        verify_hostname,
+                                    )
+                                    .await
+                                    .unwrap_or_else(|e| HealthCheckResult {
+                                        target: format!("{}:{}", check.target, port),
+                                        protocol: "tls".to_string(),
+                                        timestamp: Utc::now(),
+                                        success: false,
+                                        latency_ms: None,
+                                        error: Some(e.to_string()),
+                                        observed_at: Utc::now(),
+                                        timeout_ms: timeout,
+                                        evidence: "tls_probe".to_string(),
+                                    });
+                                    (res, "tls".to_string())
+                                }
+                            };
+
+                        // Record metrics
+                        HEALTH_CHECK_TOTAL.with_label_values(&[&proto]).inc();
+                        if !res.success {
+                            HEALTH_CHECK_FAILURES_TOTAL
+                                .with_label_values(&[&proto])
+                                .inc();
+                        }
+                        if let Some(latency) = res.latency_ms {
+                            let latency_seconds = latency as f64 / 1000.0;
+                            HEALTH_CHECK_LATENCY_SECONDS
+                                .with_label_values(&[&proto])
+                                .observe(latency_seconds);
+                        }
+
+                        // Persist observation to database
+                        let device_id = check.id.clone();
+                        if let Err(e) = persist_observation(&storage, &res, &device_id).await {
+                            tracing::error!("Failed to persist observation: {}", e);
+                        }
+
+                        // Emit check completed/failed event
+                        let check_evidence = CheckEvidence {
+                            target: res.target.clone(),
+                            protocol: res.protocol.clone(),
+                            success: res.success,
+                            latency_ms: res.latency_ms,
+                            error: res.error.clone(),
+                        };
+                        if let Err(e) = event_bus
+                            .emit_check_completed(
+                                device_id.clone(),
+                                EntityType::Service,
+                                check_evidence,
+                            )
+                            .await
+                        {
+                            tracing::error!("Failed to emit check event: {}", e);
+                        }
+
+                        Ok(())
+                    })
+                }),
+            };
+            scheduler.add_job(job);
+        }
+    }
+
+    // Backward compatibility: register legacy health check jobs if no synthetic checks configured
+    let has_synthetic_checks = !config.synthetic_checks.checks.is_empty();
+
+    if !has_synthetic_checks && config.health.interval > 0 {
+        let interval = Duration::from_secs(config.health.interval);
+
+        // ICMP health check job (legacy)
         let storage = storage.clone();
         let event_bus = event_bus.clone();
-        let interval = Duration::from_secs(config.health.interval);
         let job = netwatch::scheduler::Job {
             name: "health_check_icmp".to_string(),
             interval,
@@ -130,224 +315,7 @@ async fn register_monitoring_jobs(
                     }
 
                     // Persist observation to database
-                    if let Err(e) = persist_observation(&storage, &res).await {
-                        tracing::error!("Failed to persist observation: {}", e);
-                    }
-
-                    // Emit check completed/failed event
-                    let check_evidence = CheckEvidence {
-                        target: res.target.clone(),
-                        protocol: res.protocol.clone(),
-                        success: res.success,
-                        latency_ms: res.latency_ms,
-                        error: res.error.clone(),
-                    };
-                    if let Err(e) = event_bus
-                        .emit_check_completed(
-                            "local".to_string(),
-                            EntityType::Device,
-                            check_evidence,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to emit check event: {}", e);
-                    }
-
-                    Ok(())
-                })
-            }),
-        };
-        scheduler.add_job(job);
-    }
-
-    // HTTP health check job (P1)
-    if config.health.interval > 0 {
-        let storage = storage.clone();
-        let event_bus = event_bus.clone();
-        let interval = Duration::from_secs(config.health.interval);
-        let job = netwatch::scheduler::Job {
-            name: "health_check_http".to_string(),
-            interval,
-            task: Arc::new(move || {
-                let storage = storage.clone();
-                let event_bus = event_bus.clone();
-                Box::pin(async move {
-                    let res =
-                        check_http("http://127.0.0.1:8080/health", 2000, Some(200), None, None)
-                            .await
-                            .unwrap_or_else(|e| HealthCheckResult {
-                                target: "http://127.0.0.1:8080/health".to_string(),
-                                protocol: "http".to_string(),
-                                timestamp: Utc::now(),
-                                success: false,
-                                latency_ms: None,
-                                error: Some(e.to_string()),
-                                observed_at: Utc::now(),
-                                timeout_ms: 2000,
-                                evidence: "http_probe".to_string(),
-                            });
-
-                    // Record metrics
-                    let proto = res.protocol.as_str();
-                    HEALTH_CHECK_TOTAL.with_label_values(&[proto]).inc();
-                    if !res.success {
-                        HEALTH_CHECK_FAILURES_TOTAL
-                            .with_label_values(&[proto])
-                            .inc();
-                    }
-                    if let Some(latency) = res.latency_ms {
-                        let latency_seconds = latency as f64 / 1000.0;
-                        HEALTH_CHECK_LATENCY_SECONDS
-                            .with_label_values(&[proto])
-                            .observe(latency_seconds);
-                    }
-
-                    // Persist observation to database
-                    if let Err(e) = persist_observation(&storage, &res).await {
-                        tracing::error!("Failed to persist observation: {}", e);
-                    }
-
-                    // Emit check completed/failed event
-                    let check_evidence = CheckEvidence {
-                        target: res.target.clone(),
-                        protocol: res.protocol.clone(),
-                        success: res.success,
-                        latency_ms: res.latency_ms,
-                        error: res.error.clone(),
-                    };
-                    if let Err(e) = event_bus
-                        .emit_check_completed(
-                            "local".to_string(),
-                            EntityType::Device,
-                            check_evidence,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to emit check event: {}", e);
-                    }
-
-                    Ok(())
-                })
-            }),
-        };
-        scheduler.add_job(job);
-    }
-
-    // DNS health check job (P1)
-    if config.health.interval > 0 {
-        let storage = storage.clone();
-        let event_bus = event_bus.clone();
-        let interval = Duration::from_secs(config.health.interval);
-        let job = netwatch::scheduler::Job {
-            name: "health_check_dns".to_string(),
-            interval,
-            task: Arc::new(move || {
-                let storage = storage.clone();
-                let event_bus = event_bus.clone();
-                Box::pin(async move {
-                    let res = check_dns("localhost", Some("A".to_string()), None, 2000)
-                        .await
-                        .unwrap_or_else(|e| HealthCheckResult {
-                            target: "localhost (A)".to_string(),
-                            protocol: "dns".to_string(),
-                            timestamp: Utc::now(),
-                            success: false,
-                            latency_ms: None,
-                            error: Some(e.to_string()),
-                            observed_at: Utc::now(),
-                            timeout_ms: 2000,
-                            evidence: "dns_probe".to_string(),
-                        });
-
-                    // Record metrics
-                    let proto = res.protocol.as_str();
-                    HEALTH_CHECK_TOTAL.with_label_values(&[proto]).inc();
-                    if !res.success {
-                        HEALTH_CHECK_FAILURES_TOTAL
-                            .with_label_values(&[proto])
-                            .inc();
-                    }
-                    if let Some(latency) = res.latency_ms {
-                        let latency_seconds = latency as f64 / 1000.0;
-                        HEALTH_CHECK_LATENCY_SECONDS
-                            .with_label_values(&[proto])
-                            .observe(latency_seconds);
-                    }
-
-                    // Persist observation to database
-                    if let Err(e) = persist_observation(&storage, &res).await {
-                        tracing::error!("Failed to persist observation: {}", e);
-                    }
-
-                    // Emit check completed/failed event
-                    let check_evidence = CheckEvidence {
-                        target: res.target.clone(),
-                        protocol: res.protocol.clone(),
-                        success: res.success,
-                        latency_ms: res.latency_ms,
-                        error: res.error.clone(),
-                    };
-                    if let Err(e) = event_bus
-                        .emit_check_completed(
-                            "local".to_string(),
-                            EntityType::Device,
-                            check_evidence,
-                        )
-                        .await
-                    {
-                        tracing::error!("Failed to emit check event: {}", e);
-                    }
-
-                    Ok(())
-                })
-            }),
-        };
-        scheduler.add_job(job);
-    }
-
-    // TLS health check job (P1)
-    if config.health.interval > 0 {
-        let storage = storage.clone();
-        let event_bus = event_bus.clone();
-        let interval = Duration::from_secs(config.health.interval);
-        let job = netwatch::scheduler::Job {
-            name: "health_check_tls".to_string(),
-            interval,
-            task: Arc::new(move || {
-                let storage = storage.clone();
-                let event_bus = event_bus.clone();
-                Box::pin(async move {
-                    let res = check_tls("localhost", 8080, 2000, Some(30), false)
-                        .await
-                        .unwrap_or_else(|e| HealthCheckResult {
-                            target: "localhost:8080".to_string(),
-                            protocol: "tls".to_string(),
-                            timestamp: Utc::now(),
-                            success: false,
-                            latency_ms: None,
-                            error: Some(e.to_string()),
-                            observed_at: Utc::now(),
-                            timeout_ms: 2000,
-                            evidence: "tls_probe".to_string(),
-                        });
-
-                    // Record metrics
-                    let proto = res.protocol.as_str();
-                    HEALTH_CHECK_TOTAL.with_label_values(&[proto]).inc();
-                    if !res.success {
-                        HEALTH_CHECK_FAILURES_TOTAL
-                            .with_label_values(&[proto])
-                            .inc();
-                    }
-                    if let Some(latency) = res.latency_ms {
-                        let latency_seconds = latency as f64 / 1000.0;
-                        HEALTH_CHECK_LATENCY_SECONDS
-                            .with_label_values(&[proto])
-                            .observe(latency_seconds);
-                    }
-
-                    // Persist observation to database
-                    if let Err(e) = persist_observation(&storage, &res).await {
+                    if let Err(e) = persist_observation(&storage, &res, "local").await {
                         tracing::error!("Failed to persist observation: {}", e);
                     }
 
@@ -380,11 +348,14 @@ async fn register_monitoring_jobs(
     Ok(())
 }
 
-async fn persist_observation(storage: &Storage, result: &HealthCheckResult) -> Result<()> {
+async fn persist_observation(
+    storage: &Storage,
+    result: &HealthCheckResult,
+    device_id: &str,
+) -> Result<()> {
     use sqlx::query;
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
-    let device_id = "local"; // Placeholder - in real impl, would map target to device
     let metric = format!("{}_latency_ms", result.protocol);
     let value = result.latency_ms.unwrap_or(0) as f64;
     let source = result.evidence.clone();
@@ -575,6 +546,14 @@ async fn main() -> Result<()> {
     let incident_store = IncidentStore::new(storage.pool.clone());
     let incident_engine = IncidentEngine::new(incident_store, event_bus.subscribe(), 300);
 
+    // Initialize alert engine
+    let alert_config: AlertEngineConfig = config.alert.clone().into();
+    let alert_engine = Arc::new(tokio::sync::Mutex::new(AlertEngine::new(
+        storage.clone(),
+        event_bus.clone(),
+        alert_config,
+    )));
+
     // Initialize scheduler
     let mut scheduler = Scheduler::new(config.scheduler.concurrency);
 
@@ -667,6 +646,28 @@ async fn main() -> Result<()> {
                     let mut planner = capacity_planner.lock().await;
                     if let Err(e) = planner.analyze_capacity().await {
                         tracing::error!("Capacity planning failed: {}", e);
+                    }
+                    Ok(())
+                })
+            }),
+        };
+        scheduler.add_job(job);
+    }
+
+    // Register alert evaluation job
+    if config.alert.enabled.unwrap_or(true) {
+        let alert_engine = alert_engine.clone();
+        let interval = Duration::from_secs(config.alert.interval.unwrap_or(60));
+        let job = netwatch::scheduler::Job {
+            name: "alert_evaluation".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let alert_engine = alert_engine.clone();
+                Box::pin(async move {
+                    tracing::info!("Running alert evaluation...");
+                    let mut engine = alert_engine.lock().await;
+                    if let Err(e) = engine.run_evaluation().await {
+                        tracing::error!("Alert evaluation failed: {}", e);
                     }
                     Ok(())
                 })

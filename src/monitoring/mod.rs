@@ -21,5 +21,9 @@ pub struct HealthCheckResult {
 pub use dns::check_dns;
 pub use http::{check_http, check_http_with_phases};
 pub use icmp::ping;
+pub use metrics::{
+    HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
+    NETWATCH_SCHEDULER_ERRORS_TOTAL, NETWATCH_SCHEDULER_JOBS_TOTAL,
+};
 pub use tcp::check_tcp;
 pub use tls::{check_tls, check_tls_full};

@@ -47,6 +47,22 @@ anomaly:
   enable_spike_detection: true
   enable_drift_detection: true
   enable_pattern_break_detection: false
+alert:
+  enabled: true
+  interval: 60
+  rules: []
+synthetic_checks:
+  enabled: true
+  interval: 60
+  checks: []
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  parse_mode: "HTML"
+  timeout_seconds: 10
+  max_retries: 3
+  retry_backoff_seconds: 5
 "#;
 
     fs::write(&config_path, yaml_content).unwrap();

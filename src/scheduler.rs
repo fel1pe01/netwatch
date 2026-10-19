@@ -1,3 +1,4 @@
+use crate::monitoring::metrics::{NETWATCH_SCHEDULER_ERRORS_TOTAL, NETWATCH_SCHEDULER_JOBS_TOTAL};
 use anyhow::Result;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -55,9 +56,24 @@ impl Scheduler {
         let pool = Arc::new(tokio::sync::Semaphore::new(self.max_workers));
         while let Some(job) = rx.recv().await {
             let permit = pool.clone().acquire_owned().await.unwrap();
+            let job_name = job.name.clone();
             let fut = (job.task)();
             task::spawn(async move {
-                let _ = fut.await;
+                // Increment jobs started counter
+                NETWATCH_SCHEDULER_JOBS_TOTAL
+                    .with_label_values(&[&job_name])
+                    .inc();
+
+                match fut.await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        // Increment errors counter
+                        NETWATCH_SCHEDULER_ERRORS_TOTAL
+                            .with_label_values(&[&job_name])
+                            .inc();
+                        tracing::error!("Scheduler job '{}' failed: {}", job_name, e);
+                    }
+                }
                 drop(permit);
             });
         }

@@ -34,7 +34,7 @@ fn cli_monitor_tcp_success() {
     let port = listener.local_addr().unwrap().port();
     listener.set_nonblocking(true).unwrap();
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        std::thread::sleep(std::time::Duration::from_millis(500));
         let _ = listener.accept();
     });
 

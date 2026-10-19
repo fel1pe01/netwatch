@@ -12,7 +12,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
@@ -214,6 +214,57 @@ pub async fn confirm_hypothesis_handler(
     }
 }
 
+/// Alertmanager webhook payload
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AlertmanagerPayload {
+    pub version: String,
+    pub group_key: String,
+    pub status: String,
+    pub receiver: String,
+    pub group_labels: std::collections::HashMap<String, String>,
+    pub common_labels: std::collections::HashMap<String, String>,
+    pub common_annotations: std::collections::HashMap<String, String>,
+    pub external_url: String,
+    pub alerts: Vec<AlertmanagerAlert>,
+}
+
+/// Alertmanager alert
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AlertmanagerAlert {
+    pub status: String,
+    pub labels: std::collections::HashMap<String, String>,
+    pub annotations: std::collections::HashMap<String, String>,
+    pub starts_at: String,
+    pub ends_at: String,
+    pub generator_url: String,
+    pub fingerprint: String,
+}
+
+/// Alertmanager webhook handler
+pub async fn alertmanager_webhook_handler(
+    State(_storage): State<Arc<Storage>>,
+    Json(payload): Json<AlertmanagerPayload>,
+) -> Json<Value> {
+    tracing::info!(
+        "Received Alertmanager webhook: status={}, alerts={}, receiver={}",
+        payload.status,
+        payload.alerts.len(),
+        payload.receiver
+    );
+
+    for alert in &payload.alerts {
+        tracing::info!(
+            "Alert: {} status={} labels={:?} annotations={:?}",
+            alert.fingerprint,
+            alert.status,
+            alert.labels,
+            alert.annotations
+        );
+    }
+
+    Json(json!({"status": "ok"}))
+}
+
 pub fn router(storage: Arc<Storage>) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -236,5 +287,6 @@ pub fn router(storage: Arc<Storage>) -> Router {
             "/api/v1/incidents/{incident_id}/hypothesis/confirm",
             post(confirm_hypothesis_handler),
         )
+        .route("/api/v1/alerts/webhook", post(alertmanager_webhook_handler))
         .with_state(storage)
 }
