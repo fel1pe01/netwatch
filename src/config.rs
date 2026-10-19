@@ -17,7 +17,6 @@ pub struct StorageConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MetricsConfig {
     pub enabled: bool,
-    pub path: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -38,12 +37,6 @@ pub struct DiscoveryConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HealthConfig {
-    pub interval: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PortsConfig {
-    pub enabled: bool,
     pub interval: u64,
 }
 
@@ -121,7 +114,6 @@ pub enum SyntheticCheckType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SchedulerConfig {
     pub concurrency: usize,
-    pub rate_limit: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -234,7 +226,6 @@ pub struct Config {
     pub logging: LoggingConfig,
     pub discovery: DiscoveryConfig,
     pub health: HealthConfig,
-    pub ports: PortsConfig,
     pub snmp: SnmpConfig,
     pub scheduler: SchedulerConfig,
     pub capacity: CapacityConfig,
@@ -254,10 +245,7 @@ impl Default for Config {
             storage: StorageConfig {
                 path: "netwatch.sqlite".to_string(),
             },
-            metrics: MetricsConfig {
-                enabled: true,
-                path: "metrics.sqlite".to_string(),
-            },
+            metrics: MetricsConfig { enabled: true },
             api: ApiConfig { enabled: true },
             logging: LoggingConfig {
                 level: "info".to_string(),
@@ -267,18 +255,11 @@ impl Default for Config {
                 interval: 300,
             },
             health: HealthConfig { interval: 15 },
-            ports: PortsConfig {
-                enabled: true,
-                interval: 900,
-            },
             snmp: SnmpConfig {
                 enabled: true,
                 interval: 60,
             },
-            scheduler: SchedulerConfig {
-                concurrency: 10,
-                rate_limit: 1000,
-            },
+            scheduler: SchedulerConfig { concurrency: 10 },
             capacity: CapacityConfig {
                 enabled: Some(true),
                 interval: Some(3600),

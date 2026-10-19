@@ -1,3 +1,4 @@
+use crate::capacity_planning::{CapacityConfig, CapacityPlanner};
 use crate::discovery::interfaces::discover_interfaces;
 use crate::discovery::routing::discover_routes;
 use crate::incidents::{confirm_root_cause, IncidentStore};
@@ -214,6 +215,38 @@ pub async fn confirm_hypothesis_handler(
     }
 }
 
+#[derive(Deserialize)]
+pub struct CapacityReportRequest {
+    #[serde(default = "default_markdown")]
+    pub format: String,
+}
+
+fn default_markdown() -> String {
+    "markdown".to_string()
+}
+
+/// Capacity planning report handler
+pub async fn capacity_report_handler(
+    State(storage): State<Arc<Storage>>,
+    Json(req): Json<CapacityReportRequest>,
+) -> Json<Value> {
+    let config = CapacityConfig::default();
+    let mut planner = CapacityPlanner::new(storage.clone(), config);
+    match planner.analyze_capacity().await {
+        Ok(report) => match req.format.as_str() {
+            "json" => match report.to_json() {
+                Ok(json_str) => Json(
+                    serde_json::from_str(&json_str)
+                        .unwrap_or(json!({"error": "Failed to parse JSON"})),
+                ),
+                Err(e) => Json(json!({"error": e.to_string()})),
+            },
+            _ => Json(json!({"report": report.to_markdown()})),
+        },
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
 /// Alertmanager webhook payload
 #[derive(Debug, Deserialize, Serialize)]
 pub struct AlertmanagerPayload {
@@ -287,6 +320,7 @@ pub fn router(storage: Arc<Storage>) -> Router {
             "/api/v1/incidents/{incident_id}/hypothesis/confirm",
             post(confirm_hypothesis_handler),
         )
+        .route("/api/v1/capacity/report", post(capacity_report_handler))
         .route("/api/v1/alerts/webhook", post(alertmanager_webhook_handler))
         .with_state(storage)
 }

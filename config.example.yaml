@@ -28,7 +28,6 @@ snmp:
 
 scheduler:
   concurrency: 10
-  rate_limit: 1000
 
 capacity:
   enabled: true

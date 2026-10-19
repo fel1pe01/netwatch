@@ -15,7 +15,6 @@ storage:
   path: "test.sqlite"
 metrics:
   enabled: true
-  path: "metrics.sqlite"
 api:
   enabled: true
 logging:
@@ -25,15 +24,11 @@ discovery:
   interval: 600
 health:
   interval: 30
-ports:
-  enabled: false
-  interval: 1800
 snmp:
   enabled: false
   interval: 120
 scheduler:
   concurrency: 5
-  rate_limit: 500
 capacity:
   enabled: true
   interval: 3600
@@ -73,18 +68,14 @@ telegram:
     assert_eq!(config.agent.listen, "127.0.0.1:9090");
     assert_eq!(config.storage.path, "test.sqlite");
     assert!(config.metrics.enabled);
-    assert_eq!(config.metrics.path, "metrics.sqlite");
     assert!(config.api.enabled);
     assert_eq!(config.logging.level, "debug");
     assert!(config.discovery.enabled);
     assert_eq!(config.discovery.interval, 600);
     assert_eq!(config.health.interval, 30);
-    assert!(!config.ports.enabled);
-    assert_eq!(config.ports.interval, 1800);
     assert!(!config.snmp.enabled);
     assert_eq!(config.snmp.interval, 120);
     assert_eq!(config.scheduler.concurrency, 5);
-    assert_eq!(config.scheduler.rate_limit, 500);
 }
 
 #[test]
