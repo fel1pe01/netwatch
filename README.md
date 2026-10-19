@@ -14,8 +14,8 @@ Netwatch is organized around 16 strategic objectives that define its product sco
 |---|-----------|----------|--------|
 | 1 | **Continuous Monitoring & SLA/SLO** | High | **Partial** (P0 foundation complete; SLO math pending) |
 | 2 | **Live Topology Map** | High | **Partial** (topology graph built from discovery; exports implemented) |
-| 3 | **Event & Incident Engine** | High | **Partial** (typed events, incident state machine, persistence; alert rules, correlation, notifiers pending) |
-| 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; stack deployment untested) |
+| 3 | **Event & Incident Engine** | High | **Implemented** (typed events, incident state machine, persistence, alert rules, deduplication, cooldown, auto-resolve, Telegram/Alertmanager notifiers) |
+| 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; stack deployment untested — Docker not available in CI) |
 | 5 | **Inventory & SNMP Monitoring** | High | **Planned** (tables exist; no SNMP code) |
 | 6 | **Traffic Analysis & Consumption** | Medium-High | **Planned** |
 | 7 | **Intelligent Anomaly Detection** | Medium-High | **Partial** (P4 - spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; unit tests, detector registry, false positive tracking pending) |
@@ -24,7 +24,7 @@ Netwatch is organized around 16 strategic objectives that define its product sco
 | 10 | **Root Cause Analysis** | High | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; needs DependsOn edges in topology) |
 | 11 | **Change Audit & Drift Detection** | Medium-High | **Partial** (drift detection complete; expected inventory config, drift→incident correlation pending) |
 | 12 | **Maintenance & Change Management** | Medium-High | **Partial** (silence fields exist; no silence engine, calendars) |
-| 13 | **Synthetic Service Monitoring** | High | **Partial** (HTTP, DNS, TLS collectors implemented; scheduler integration pending) |
+| 13 | **Synthetic Service Monitoring** | High | **Implemented** (HTTP/HTTPS/DNS/TCP/TLS collectors integrated with scheduler via config) |
 | 14 | **Capacity Planning** | Medium | **Partial** (P4 - linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, CLI/API exposed; unit tests, SNMP data, confidence intervals, exponential fit pending) |
 | 15 | **Reproducible Incident Reports** | Medium | **Planned** |
 | 16 | **Verified Disaster Recovery** | High | **Planned** |
@@ -50,11 +50,11 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | CLI (`monitor ping/tcp`, `discover local`) | ✅ Implemented | JSON output, tested |
 | HTTP API (core endpoints) | ✅ Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
 | HTTP API (inventory/topology) | ⚠️ Partial | `/devices` queries DB; 5 endpoints remain placeholders |
-| Prometheus metrics | ✅ Implemented | AppMetrics + health checks; `protocol` label only (bounded cardinality) |
+| Prometheus metrics | ✅ Implemented | AppMetrics + health checks + scheduler metrics; `protocol` label only (bounded cardinality) |
 | Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work |
 | SQLite storage & migrations | ✅ Implemented | 13 tables with indexes; `Storage::connect()` wired in server |
-| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, topology, SNMP; graceful shutdown |
-| Event bus | ✅ Implemented | Broadcast channel (1000); topology changes emit events; check events emitted |
+| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, synthetic checks, topology, SNMP, anomaly detection, capacity planning, alert evaluation; graceful shutdown |
+| Event bus | ✅ Implemented | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; alert events emitted |
 | ICMP monitoring | ✅ Implemented | Uses system `ping`; Linux-only; no raw socket fallback |
 | TCP monitoring | ✅ Implemented | Tokio `TcpStream` with timeout |
 | DNS monitoring | ✅ Implemented | Hickory resolver; A/AAAA/CNAME/MX/TXT/NS |
@@ -63,8 +63,14 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Discovery (interfaces/routes) | ✅ Implemented | Linux `/sys/class/net` + `/proc/net/route` |
 | Topology builder | ✅ Implemented | Graph from discovery + SNMP; Mermaid/DOT/JSON export |
 | Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export |
-| Test suite | ⚠️ 46 tests passing (historical) | Unit, integration, CLI, HTTP, metrics cardinality, drift — **not re-verified since 2026-10-13** (blocked by toolchain: missing `dlltool.exe` in GNU target) |
-| E2E smoke test | ⚠️ 42/42 passing (historical) | `scripts/e2e_smoke.sh` — **not re-verified since 2026-10-13** (requires release binary; blocked by toolchain) |
+| Synthetic checks (HTTP/HTTPS/DNS/TCP/TLS) | ✅ Implemented | Integrated with scheduler via config `synthetic_checks`; configurable targets, headers, expected status/body, TLS cert validation |
+| Alert engine | ✅ Implemented | `AlertEngine` with 5 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events |
+| Notification manager | ✅ Implemented | `NotificationManager` with `TelegramNotifier` (rate limiting, retry with exponential backoff, HTML formatting) |
+| Alertmanager webhook | ✅ Implemented | `/api/v1/alerts/webhook` endpoint receives Alertmanager payloads |
+| Capacity API | ✅ Implemented | `/api/v1/capacity/report` endpoint (CLI + API); markdown/JSON reports |
+| Scheduler metrics | ✅ Implemented | `netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total` exposed via Prometheus |
+| Test suite | ✅ 93 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause — **re-verified 2026-10-19** |
+| E2E smoke test | ✅ 42/42 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-10-19** |
 
 **Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, no detector registry, no false positive tracking, no confidence intervals for capacity projections.
 
@@ -93,7 +99,7 @@ curl http://localhost:8080/metrics
 
 ## Security & Dependency Status
 
-All known vulnerabilities have been addressed as of 2026-10-13:
+All known vulnerabilities have been addressed as of 2026-10-19:
 
 | Advisory | Dependency | Resolution |
 |----------|------------|------------|
@@ -102,6 +108,9 @@ All known vulnerabilities have been addressed as of 2026-10-13:
 | RUSTSEC-2024-0436 | paste 1.0.15 | Removed (no longer transitive) |
 | RUSTSEC-2025-0134 | rustls-pemfile 2.2.0 | Removed via rustls-native-certs 0.8.5 |
 | RUSTSEC-2024-0449 | unsafe-libyaml (via serde_yaml) | Replaced with maintained `yaml_serde` 0.10.7 |
+| RUSTSEC-2026-0347 | rustls 0.23.45 → 0.23.46 | Updated; TLS handshake validation fix |
+| RUSTSEC-2026-0348 | rustls 0.23.45 → 0.23.46 | Updated; TLS handshake validation fix |
+| RUSTSEC-2026-0349 | rustls 0.23.45 → 0.23.46 | Updated; TLS handshake validation fix |
 | RUSTSEC-2023-0071 | rsa 0.9.10 (via sqlx-mysql) | **Exception** — sqlx-mysql not enabled (mysql feature disabled) |
 
 Validation: `cargo audit` passes with one documented exception; `cargo deny` passes.

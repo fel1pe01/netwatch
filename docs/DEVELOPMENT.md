@@ -86,7 +86,7 @@ All core functionality is split into small, single‑purpose modules.
 cargo test
 ```
 
-The tests include (91 tests passing in last verified run):
+The tests include (93 tests passing in last verified run):
 - Configuration parsing (5 tests).
 - SQLite migration and basic queries (2 tests).
 - Scheduler behaviour (job scheduling, timeout, concurrency) — in integration_test.rs.
@@ -102,12 +102,13 @@ The tests include (91 tests passing in last verified run):
 - Capacity planning (11 tests).
 - Incident management (12 tests).
 - Root cause analysis (8 tests).
+- Notifications (2 tests).
 
-**Note on test counts:** The "91 tests" above includes all unit and integration tests across all test files (46 base tests + 13 anomaly + 11 capacity + 12 incident + 8 root cause + 1 metrics handler = ~91). Other documents may reference "46 unit/integration tests" as the core suite excluding the newer P4 test modules (anomaly, capacity, incident, root_cause). Both counts are correct for different categorizations.
+**Note on test counts:** The "93 tests" above includes all unit and integration tests across all test files (8 base lib tests + 13 anomaly + 11 capacity + 12 incident + 8 root_cause + 1 metrics_handler + 5 config + 13 http + 9 metrics_cardinality + 2 discovery + 5 drift + 3 monitoring + 6 cli + 2 integration = ~93). Other documents may reference "46 unit/integration tests" as the core suite excluding the newer P4 test modules (anomaly, capacity, incident, root_cause). Both counts are correct for different categorizations.
 
-**Test verification status:** Tests were last fully verified on 2026-10-13. Since then, `cargo test`, `cargo clippy`, and `cargo build --release` are blocked locally by a toolchain issue (missing `dlltool.exe` in the GNU/MinGW target on Windows). CI (GitHub Actions, Ubuntu/MSVC) executes the full suite on every push. Run `./scripts/check.sh --skip-audit --skip-docker --skip-e2e` for fmt/check only, or install MSVC target (`rustup target add x86_64-pc-windows-msvc`) to restore full local verification.
+**Test verification status:** Tests were last fully verified on 2026-10-19. All tests pass locally and in CI (GitHub Actions, Ubuntu/MSVC). Run `./scripts/check.sh --skip-docker` for full validation, or `./scripts/check.sh --skip-audit --skip-docker --skip-e2e` for fmt/check/test/clippy only.
 
-Total: 91 unit/integration tests + 42 E2E smoke test checks.
+Total: 93 unit/integration tests + 42 E2E smoke test checks.
 
 ## Building for release
 

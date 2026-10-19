@@ -7,6 +7,8 @@
 **Rama:** main
 **Estado del árbol de trabajo:** Limpio (sin cambios pendientes)
 
+> **Nota (2026-10-19):** Los hallazgos de esta auditoría se refieren al estado del código en el commit `27dcdb8`. Los hallazgos de prioridad Alto (HALLAZGO-001, HALLAZGO-002) y varios hallazgos de prioridad Medio/Bajo han sido abordados en commits posteriores (`0998003`, `55d6f69`, `e71c0e7`). Ver `CHANGES_MADE.md` y `IMPLEMENTATION_STATUS.md` para el estado actual.
+
 ---
 
 ## 1. Resumen Ejecutivo

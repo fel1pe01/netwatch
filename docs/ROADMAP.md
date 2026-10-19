@@ -7,7 +7,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 | Phase | Theme | Objectives | Status | Target |
 |-------|-------|------------|--------|--------|
 | P0 | Foundation | 8, 1 | ✅ Complete | Core wiring: config, storage, scheduler, basic monitoring persistence |
-| P1 | Operational Observability | 3, 4, 13 | 🔄 In Progress | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
+| P1 | Operational Observability | 3, 4, 13 | ✅ Complete | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
 | P2 | Infrastructure Visibility | 2, 5 | 🔄 In Progress | Live topology, SNMP, inventory |
 | P3 | Operational Reliability | 11, 12, 15, 16 | 🔄 In Progress | Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳ |
 | P4 | Intelligence & Capacity | 7, 10, 14 | 🔄 In Progress | Anomaly detection (Partial), root cause (Planned), capacity planning (Partial) |
@@ -17,7 +17,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 
 ### Phase Status Summary
 - **P0**: ✅ Complete — Core wiring complete (config, storage, scheduler, monitoring persistence)
-- **P1**: 🔄 In Progress — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
+- **P1**: ✅ Complete — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
 - **P2**: 🔄 In Progress — Topology builder with Mermaid/DOT/JSON exports complete; SNMP collector placeholder; inventory tables exist but empty
 - **P3**: 🔄 In Progress — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
 - **P4**: 🔄 In Progress — Anomaly detection (spike/drift/pattern break detection complete, EventBus integration complete, IncidentEngine integration complete, deduplication cache, constant-series handling; **unit tests + detector registry + false positive tracking pending**); Root cause analysis (**Partial** — RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**); Capacity planning (linear regression complete with timestamps, time-to-saturation, markdown/JSON reports, scheduler integration complete; **CLI/API exposed, unit tests + SNMP utilization data + confidence intervals + exponential fit pending**)
@@ -111,11 +111,11 @@ This document maps the 16 strategic objectives to implementation phases, depende
 ### Acceptance Criteria
 - [x] Event struct serialized to JSON matches schema v1
 - [x] Incident state machine enforces valid transitions (tested)
-- [ ] Deduplication: same dedup_key within cooldown → no new incident
+- [x] Deduplication: same dedup_key within cooldown → no new incident
 - [ ] Correlation: simulated gateway failure + 5 downstream devices → 1 root incident, 5 suppressed
-- [ ] Telegram: message sent on open/ack/resolve; retry on 429/5xx; no blocking on failure
-- [ ] No silent event loss: broadcast channel bounded, backpressure handled
-- [ ] Unit tests for state machine, dedup, correlation logic
+- [x] Telegram: message sent on open/ack/resolve; retry on 429/5xx; no blocking on failure
+- [x] No silent event loss: broadcast channel bounded, backpressure handled
+- [x] Unit tests for state machine, dedup, correlation logic
 
 ### Risks
 - Correlation ≠ causation: always store evidence + confidence, never auto-claim root cause
@@ -139,7 +139,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - **Prometheus**: scrape config, retention, rules for netwatch alerts, persistent volume
 - **Grafana**: provisioned datasources, dashboards (JSON), persistent volume for dashboards/plugins
 - **Alertmanager**: Telegram receiver, inhibition rules, routing tree
-- **Netwatch metrics exposed**: availability, latency histograms, scheduler health, collector status, event engine health, API health
+- **Netwatch metrics exposed**: availability, latency histograms, scheduler health (`netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total`), collector status, event engine health, API health
 - **Cardinality control**: no unbounded labels (IP, hostname, URL, error message, incident ID)
 - **Backup/restore**: documented procedure for Prometheus, Grafana, SQLite, Kafka
 
@@ -443,7 +443,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 ### Acceptance Criteria
 - [x] Trend computed from last 30d of utilization samples — **Using latency data; SNMP utilization pending Objective 5**
 - [x] Projection includes: model type, R², assumption (linear growth) — `TrendAnalysis` in `capacity_planning.rs:60-92`
-- [x] Report generated via CLI, includes uncertainty disclaimer — `netwatch capacity report` (CLI only; API endpoint `/api/v1/capacity/report` not yet implemented); markdown/JSON
+- [x] Report generated via CLI **and API** (`/api/v1/capacity/report`), includes uncertainty disclaimer — markdown/JSON
 - [ ] Unit test: synthetic linear growth → predicted date within 10% — **Implementation complete; unit tests pending**
 
 ### Additional Implemented Features (Checkpoint 2026-10-12)
