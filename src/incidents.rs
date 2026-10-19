@@ -3,9 +3,13 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io;
+use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use uuid::Uuid;
+
+use crate::topology::TopologyEdgeType;
+use crate::topology_store::TopologyStore;
 
 #[derive(Debug, Error)]
 pub enum IncidentError {
@@ -543,6 +547,7 @@ pub struct IncidentEngine {
     pub store: IncidentStore,
     event_bus: broadcast::Receiver<crate::events::Event>,
     cooldown_seconds: u64,
+    topology_store: Option<Arc<TopologyStore>>,
 }
 
 impl IncidentEngine {
@@ -555,7 +560,14 @@ impl IncidentEngine {
             store,
             event_bus,
             cooldown_seconds,
+            topology_store: None,
         }
+    }
+
+    /// Set topology store for correlation logic
+    pub fn with_topology_store(mut self, topology_store: Arc<TopologyStore>) -> Self {
+        self.topology_store = Some(topology_store);
+        self
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -583,6 +595,20 @@ impl IncidentEngine {
 
     async fn handle_firing_event(&mut self, event: crate::events::Event) -> Result<()> {
         use crate::events::{EventType, Severity};
+
+        // Check if this entity is suppressed by an upstream root cause
+        let entity_type_str = format!("{:?}", event.entity_type);
+        if self
+            .is_suppressed_by_root_cause(&event.entity_id, &entity_type_str)
+            .await?
+        {
+            tracing::debug!(
+                "Skipping incident creation for {} ({}) - suppressed by upstream root cause",
+                event.entity_id,
+                entity_type_str
+            );
+            return Ok(());
+        }
 
         // Check cooldown
         if let Some(mut existing) = self.store.find_by_dedup_key(&event.dedup_key).await? {
@@ -649,6 +675,13 @@ impl IncidentEngine {
         incident.set_cooldown(self.cooldown_seconds);
 
         self.store.create(&incident).await?;
+
+        // If this is a gateway or device failure, suppress downstream dependents
+        if entity_type_str == "gateway" || entity_type_str == "device" {
+            self.suppress_downstream_incidents(&event.entity_id, &entity_type_str)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -662,5 +695,141 @@ impl IncidentEngine {
             }
         }
         Ok(())
+    }
+
+    /// Find all downstream entities that depend on the given entity via topology
+    /// Returns a list of (entity_id, entity_type) tuples that are downstream dependents
+    async fn find_downstream_dependents(
+        &self,
+        entity_id: &str,
+        entity_type: &str,
+    ) -> Result<Vec<(String, String)>> {
+        let Some(topology_store) = &self.topology_store else {
+            return Ok(Vec::new());
+        };
+
+        let edges = topology_store.list_edges().await?;
+        let mut dependents = Vec::new();
+
+        // Find edges where the source is the failed entity and edge type indicates dependency
+        // GatewayOf: gateway -> device (gateway is gateway of device)
+        // DependsOn: service -> device/gateway (service depends on device/gateway)
+        for edge in &edges {
+            let is_downstream = match entity_type {
+                "gateway" => {
+                    // Gateway failed: find devices that use this gateway (GatewayOf edge from gateway to device)
+                    edge.source == entity_id && edge.edge_type == TopologyEdgeType::GatewayOf
+                }
+                "device" => {
+                    // Device failed: find services that depend on this device (DependsOn edge from service to device)
+                    edge.target == entity_id && edge.edge_type == TopologyEdgeType::DependsOn
+                }
+                "service" => {
+                    // Service failed: find services that depend on this service (DependsOn edge from service to service)
+                    edge.target == entity_id && edge.edge_type == TopologyEdgeType::DependsOn
+                }
+                _ => false,
+            };
+
+            if is_downstream {
+                // Get the dependent node to determine its type
+                if let Ok(Some(node)) = topology_store.get_node(&edge.target).await {
+                    dependents.push((node.id, format!("{:?}", node.node_type)));
+                }
+            }
+        }
+
+        Ok(dependents)
+    }
+
+    /// Suppress incidents for downstream dependents when a root cause is identified
+    async fn suppress_downstream_incidents(
+        &mut self,
+        root_entity_id: &str,
+        root_entity_type: &str,
+    ) -> Result<()> {
+        let dependents = self
+            .find_downstream_dependents(root_entity_id, root_entity_type)
+            .await?;
+
+        for (dependent_id, dependent_type) in dependents {
+            // Create a dedup_key that matches what would be generated for this dependent
+            // We use a special correlation_id to mark these as suppressed
+            let dedup_key = format!("check_failed:{}", dependent_id);
+
+            // Check if there's already an incident for this dependent
+            if let Some(mut existing) = self.store.find_by_dedup_key(&dedup_key).await? {
+                // If the incident is open or acknowledged, mark it as suppressed by updating its correlation_id
+                // and adding evidence that it's suppressed due to root cause
+                if existing.state == IncidentState::Open
+                    || existing.state == IncidentState::Acknowledged
+                {
+                    existing.correlation_id = Some(format!("suppressed_by:{}", root_entity_id));
+                    existing
+                        .labels
+                        .insert("suppressed".to_string(), "true".to_string());
+                    existing
+                        .labels
+                        .insert("root_cause_entity".to_string(), root_entity_id.to_string());
+                    existing.updated_at = Utc::now();
+                    self.store.update(&existing).await?;
+
+                    tracing::info!(
+                        "Suppressed incident for dependent {} ({}) due to root cause {} ({})",
+                        dependent_id,
+                        dependent_type,
+                        root_entity_id,
+                        root_entity_type
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Check if an entity has an active root cause incident that should suppress new incidents
+    async fn is_suppressed_by_root_cause(
+        &self,
+        entity_id: &str,
+        entity_type: &str,
+    ) -> Result<bool> {
+        // Check if there's a gateway or device upstream that has an active incident
+        let Some(topology_store) = &self.topology_store else {
+            return Ok(false);
+        };
+
+        let edges = topology_store.list_edges().await?;
+
+        // Find upstream entities (gateways/devices this entity depends on)
+        for edge in &edges {
+            let is_upstream = match entity_type {
+                "device" => {
+                    // Device depends on gateway (GatewayOf edge from gateway to device)
+                    edge.target == entity_id && edge.edge_type == TopologyEdgeType::GatewayOf
+                }
+                "service" => {
+                    // Service depends on device/gateway (DependsOn edge from service to device/gateway)
+                    edge.source == entity_id && edge.edge_type == TopologyEdgeType::DependsOn
+                }
+                _ => false,
+            };
+
+            if is_upstream {
+                // Check if upstream entity has an active incident
+                let upstream_dedup_key = format!("check_failed:{}", edge.source);
+                if let Some(upstream_incident) =
+                    self.store.find_by_dedup_key(&upstream_dedup_key).await?
+                {
+                    if upstream_incident.state == IncidentState::Open
+                        || upstream_incident.state == IncidentState::Acknowledged
+                    {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
     }
 }

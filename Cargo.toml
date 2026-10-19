@@ -38,6 +38,8 @@ async-snmp = "0.18"
 async-trait = "0.1"
 # HTTP client
 reqwest = { version = "0.13", features = ["json", "rustls", "gzip"] }
+# URL parsing
+url = "2.5"
 # DNS resolution
 hickory-resolver = { version = "0.26", features = ["tokio"] }
 # TLS

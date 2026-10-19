@@ -28,6 +28,61 @@ pub static HEALTH_CHECK_LATENCY_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
     .expect("failed to create histogram")
 });
 
+/// Synthetic check per-phase latency metrics
+pub static SYNTHETIC_CHECK_DNS_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "netwatch_synthetic_check_dns_duration_seconds",
+        "DNS resolution duration for synthetic checks in seconds",
+        &["target"]
+    )
+    .expect("failed to create histogram")
+});
+
+pub static SYNTHETIC_CHECK_TCP_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "netwatch_synthetic_check_tcp_duration_seconds",
+        "TCP connection duration for synthetic checks in seconds",
+        &["target"]
+    )
+    .expect("failed to create histogram")
+});
+
+pub static SYNTHETIC_CHECK_TLS_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "netwatch_synthetic_check_tls_duration_seconds",
+        "TLS handshake duration for synthetic checks in seconds",
+        &["target"]
+    )
+    .expect("failed to create histogram")
+});
+
+pub static SYNTHETIC_CHECK_TTFB_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "netwatch_synthetic_check_ttfb_duration_seconds",
+        "Time to first byte for synthetic checks in seconds",
+        &["target"]
+    )
+    .expect("failed to create histogram")
+});
+
+pub static SYNTHETIC_CHECK_TOTAL_DURATION_SECONDS: Lazy<HistogramVec> = Lazy::new(|| {
+    register_histogram_vec!(
+        "netwatch_synthetic_check_total_duration_seconds",
+        "Total duration for synthetic checks in seconds",
+        &["target"]
+    )
+    .expect("failed to create histogram")
+});
+
+pub static SYNTHETIC_CHECK_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
+    register_counter_vec!(
+        "netwatch_synthetic_checks_total",
+        "Total number of synthetic checks performed",
+        &["protocol", "result"]
+    )
+    .expect("failed to create counter")
+});
+
 pub static NETWATCH_SCHEDULER_JOBS_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(
         "netwatch_scheduler_jobs_total",

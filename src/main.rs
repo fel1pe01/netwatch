@@ -19,6 +19,7 @@ use netwatch::monitoring::metrics::{
 };
 use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
 use netwatch::scheduler::Scheduler;
+use netwatch::service::ServiceStore;
 use netwatch::snmp::SnmpCollector;
 use netwatch::storage::Storage;
 use netwatch::topology_builder::TopologyBuilder;
@@ -85,8 +86,13 @@ async fn register_monitoring_jobs(
 ) -> Result<()> {
     use netwatch::monitoring::metrics::{
         HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
+        SYNTHETIC_CHECK_DNS_DURATION_SECONDS, SYNTHETIC_CHECK_TCP_DURATION_SECONDS,
+        SYNTHETIC_CHECK_TLS_DURATION_SECONDS, SYNTHETIC_CHECK_TOTAL,
+        SYNTHETIC_CHECK_TOTAL_DURATION_SECONDS, SYNTHETIC_CHECK_TTFB_DURATION_SECONDS,
     };
-    use netwatch::monitoring::{check_dns, check_http, check_tls, ping};
+    use netwatch::monitoring::{
+        check_dns, check_http_with_phases, check_tls, ping, HttpPhaseTimings,
+    };
     use std::time::Duration;
 
     // Register synthetic checks from config
@@ -111,7 +117,7 @@ async fn register_monitoring_jobs(
                     let event_bus = event_bus.clone();
                     let check = check_config.clone();
                     Box::pin(async move {
-                        let (res, proto) =
+                        let (res, proto, phase_timings) =
                             match check.check_type {
                                 SyntheticCheckType::Http | SyntheticCheckType::Https => {
                                     let url = if check.check_type == SyntheticCheckType::Https {
@@ -123,7 +129,7 @@ async fn register_monitoring_jobs(
                                     let expected_status = check.expected_status;
                                     let expected_body = check.expected_body.clone();
                                     let headers = check.headers.clone().unwrap_or_default();
-                                    let res = check_http(
+                                    let (res, phases) = check_http_with_phases(
                                         &url,
                                         timeout,
                                         expected_status,
@@ -131,22 +137,28 @@ async fn register_monitoring_jobs(
                                         Some(headers),
                                     )
                                     .await
-                                    .unwrap_or_else(|e| HealthCheckResult {
-                                        target: url.clone(),
-                                        protocol:
-                                            if check.check_type == SyntheticCheckType::Https {
-                                                "https"
-                                            } else {
-                                                "http"
-                                            }
-                                            .to_string(),
-                                        timestamp: Utc::now(),
-                                        success: false,
-                                        latency_ms: None,
-                                        error: Some(e.to_string()),
-                                        observed_at: Utc::now(),
-                                        timeout_ms: timeout,
-                                        evidence: "http_probe".to_string(),
+                                    .unwrap_or_else(|e| {
+                                        (
+                                            HealthCheckResult {
+                                                target: url.clone(),
+                                                protocol: if check.check_type
+                                                    == SyntheticCheckType::Https
+                                                {
+                                                    "https"
+                                                } else {
+                                                    "http"
+                                                }
+                                                .to_string(),
+                                                timestamp: Utc::now(),
+                                                success: false,
+                                                latency_ms: None,
+                                                error: Some(e.to_string()),
+                                                observed_at: Utc::now(),
+                                                timeout_ms: timeout,
+                                                evidence: "http_probe".to_string(),
+                                            },
+                                            HttpPhaseTimings::default(),
+                                        )
                                     });
                                     (
                                         res,
@@ -156,6 +168,7 @@ async fn register_monitoring_jobs(
                                             "http"
                                         }
                                         .to_string(),
+                                        Some(phases),
                                     )
                                 }
                                 SyntheticCheckType::Dns => {
@@ -174,7 +187,7 @@ async fn register_monitoring_jobs(
                                             timeout_ms: timeout,
                                             evidence: "dns_probe".to_string(),
                                         });
-                                    (res, "dns".to_string())
+                                    (res, "dns".to_string(), None)
                                 }
                                 SyntheticCheckType::Tcp => {
                                     let port = check.port.unwrap_or(80);
@@ -192,7 +205,7 @@ async fn register_monitoring_jobs(
                                             timeout_ms: timeout,
                                             evidence: "tcp_probe".to_string(),
                                         });
-                                    (res, "tcp".to_string())
+                                    (res, "tcp".to_string(), None)
                                 }
                                 SyntheticCheckType::Tls => {
                                     let port = check.port.unwrap_or(443);
@@ -218,22 +231,43 @@ async fn register_monitoring_jobs(
                                         timeout_ms: timeout,
                                         evidence: "tls_probe".to_string(),
                                     });
-                                    (res, "tls".to_string())
+                                    (res, "tls".to_string(), None)
                                 }
                             };
 
-                        // Record metrics
-                        HEALTH_CHECK_TOTAL.with_label_values(&[&proto]).inc();
-                        if !res.success {
-                            HEALTH_CHECK_FAILURES_TOTAL
-                                .with_label_values(&[&proto])
-                                .inc();
-                        }
+                        // Record synthetic check metrics
+                        let result_label = if res.success { "success" } else { "failure" };
+                        SYNTHETIC_CHECK_TOTAL
+                            .with_label_values(&[&proto, result_label])
+                            .inc();
                         if let Some(latency) = res.latency_ms {
                             let latency_seconds = latency as f64 / 1000.0;
-                            HEALTH_CHECK_LATENCY_SECONDS
-                                .with_label_values(&[&proto])
+                            SYNTHETIC_CHECK_TOTAL_DURATION_SECONDS
+                                .with_label_values(&[&check.target])
                                 .observe(latency_seconds);
+                        }
+                        // Record per-phase metrics if available
+                        if let Some(phases) = phase_timings {
+                            if let Some(dns_ms) = phases.dns_ms {
+                                SYNTHETIC_CHECK_DNS_DURATION_SECONDS
+                                    .with_label_values(&[&check.target])
+                                    .observe(dns_ms as f64 / 1000.0);
+                            }
+                            if let Some(tcp_ms) = phases.tcp_ms {
+                                SYNTHETIC_CHECK_TCP_DURATION_SECONDS
+                                    .with_label_values(&[&check.target])
+                                    .observe(tcp_ms as f64 / 1000.0);
+                            }
+                            if let Some(tls_ms) = phases.tls_ms {
+                                SYNTHETIC_CHECK_TLS_DURATION_SECONDS
+                                    .with_label_values(&[&check.target])
+                                    .observe(tls_ms as f64 / 1000.0);
+                            }
+                            if let Some(ttfb_ms) = phases.ttfb_ms {
+                                SYNTHETIC_CHECK_TTFB_DURATION_SECONDS
+                                    .with_label_values(&[&check.target])
+                                    .observe(ttfb_ms as f64 / 1000.0);
+                            }
                         }
 
                         // Persist observation to database
@@ -378,6 +412,124 @@ async fn persist_observation(
     .bind(&now)
     .execute(&storage.pool)
     .await?;
+
+    Ok(())
+}
+
+/// Run service checks for all services due for checking
+async fn run_service_checks(service_store: &ServiceStore, event_bus: &Arc<EventBus>) -> Result<()> {
+    use netwatch::events::{CheckEvidence, EntityType};
+    use netwatch::monitoring::metrics::{
+        HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
+    };
+    use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
+
+    let services = service_store.get_due_for_check().await?;
+
+    for service in services {
+        // Determine check type based on protocol
+        let (res, proto) = match service.protocol.as_str() {
+            "http" | "https" => {
+                // For HTTP/HTTPS services, we'd need the full URL
+                // For now, construct from device info (would need device lookup)
+                let url = format!(
+                    "{}://device-{}:{}",
+                    service.protocol, service.device_id, service.port
+                );
+                let timeout = 5000;
+                let res =
+                    netwatch::monitoring::http::check_http(&url, timeout, Some(200), None, None)
+                        .await
+                        .unwrap_or_else(|e| HealthCheckResult {
+                            target: url.clone(),
+                            protocol: service.protocol.clone(),
+                            timestamp: Utc::now(),
+                            success: false,
+                            latency_ms: None,
+                            error: Some(e.to_string()),
+                            observed_at: Utc::now(),
+                            timeout_ms: timeout,
+                            evidence: "http_probe".to_string(),
+                        });
+                (res, service.protocol.clone())
+            }
+            "tcp" => {
+                // For TCP services, we need the host/IP
+                // This would require looking up the device
+                let timeout = 5000;
+                let res = check_tcp(&service.device_id, service.port as u16, timeout)
+                    .await
+                    .unwrap_or_else(|e| HealthCheckResult {
+                        target: format!("{}:{}", service.device_id, service.port),
+                        protocol: "tcp".to_string(),
+                        timestamp: Utc::now(),
+                        success: false,
+                        latency_ms: None,
+                        error: Some(e.to_string()),
+                        observed_at: Utc::now(),
+                        timeout_ms: timeout,
+                        evidence: "tcp_probe".to_string(),
+                    });
+                (res, "tcp".to_string())
+            }
+            "icmp" => {
+                let timeout = 5000;
+                let res =
+                    ping(&service.device_id, timeout)
+                        .await
+                        .unwrap_or_else(|e| HealthCheckResult {
+                            target: service.device_id.clone(),
+                            protocol: "icmp".to_string(),
+                            timestamp: Utc::now(),
+                            success: false,
+                            latency_ms: None,
+                            error: Some(e.to_string()),
+                            observed_at: Utc::now(),
+                            timeout_ms: timeout,
+                            evidence: "icmp".to_string(),
+                        });
+                (res, "icmp".to_string())
+            }
+            _ => {
+                tracing::warn!("Unknown service protocol: {}", service.protocol);
+                continue;
+            }
+        };
+
+        // Record metrics
+        HEALTH_CHECK_TOTAL.with_label_values(&[&proto]).inc();
+        if !res.success {
+            HEALTH_CHECK_FAILURES_TOTAL
+                .with_label_values(&[&proto])
+                .inc();
+        }
+        if let Some(latency) = res.latency_ms {
+            let latency_seconds = latency as f64 / 1000.0;
+            HEALTH_CHECK_LATENCY_SECONDS
+                .with_label_values(&[&proto])
+                .observe(latency_seconds);
+        }
+
+        // Update service status
+        service_store
+            .update_check_result(&service.id, res.success, res.latency_ms.map(|v| v as i64))
+            .await?;
+
+        // Emit check completed/failed event
+        let check_evidence = CheckEvidence {
+            target: res.target.clone(),
+            protocol: res.protocol.clone(),
+            success: res.success,
+            latency_ms: res.latency_ms,
+            error: res.error.clone(),
+        };
+        if let Err(e) = event_bus
+            .emit_check_completed(service.id.clone(), EntityType::Service, check_evidence)
+            .await
+        {
+            tracing::error!("Failed to emit service check event: {}", e);
+        }
+    }
 
     Ok(())
 }
@@ -544,7 +696,11 @@ async fn main() -> Result<()> {
 
     // Initialize incident store and engine
     let incident_store = IncidentStore::new(storage.pool.clone());
-    let incident_engine = IncidentEngine::new(incident_store, event_bus.subscribe(), 300);
+    let incident_engine = IncidentEngine::new(incident_store, event_bus.subscribe(), 300)
+        .with_topology_store(topology_store.clone());
+
+    // Initialize service store
+    let service_store = Arc::new(ServiceStore::new(storage.pool.clone()));
 
     // Initialize alert engine
     let alert_config: AlertEngineConfig = config.alert.clone().into();
@@ -646,6 +802,29 @@ async fn main() -> Result<()> {
                     let mut planner = capacity_planner.lock().await;
                     if let Err(e) = planner.analyze_capacity().await {
                         tracing::error!("Capacity planning failed: {}", e);
+                    }
+                    Ok(())
+                })
+            }),
+        };
+        scheduler.add_job(job);
+    }
+
+    // Register service check job
+    if config.synthetic_checks.enabled.unwrap_or(true) {
+        let service_store = service_store.clone();
+        let event_bus = event_bus.clone();
+        let interval = Duration::from_secs(config.synthetic_checks.interval.unwrap_or(60));
+        let job = netwatch::scheduler::Job {
+            name: "service_check".to_string(),
+            interval,
+            task: Arc::new(move || {
+                let service_store = service_store.clone();
+                let event_bus = event_bus.clone();
+                Box::pin(async move {
+                    tracing::info!("Running service checks...");
+                    if let Err(e) = run_service_checks(&service_store, &event_bus).await {
+                        tracing::error!("Service checks failed: {}", e);
                     }
                     Ok(())
                 })

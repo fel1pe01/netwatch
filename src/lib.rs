@@ -34,6 +34,8 @@ pub mod notifications;
 pub mod root_cause;
 #[path = "scheduler.rs"]
 pub mod scheduler;
+#[path = "service.rs"]
+pub mod service;
 #[path = "snmp.rs"]
 pub mod snmp;
 #[path = "storage.rs"]
