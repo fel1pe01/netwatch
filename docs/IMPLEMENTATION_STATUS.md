@@ -16,8 +16,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 |---|-----------|---------------|----------|
 | 1 | Continuous Monitoring & SLA/SLO | **Partial** (P0 complete; SLO math pending) | Availability/percentile queries, SLO config, error budget, burn rate, maintenance windows |
 | 2 | Live Topology Map | **Partial** (graph built, exports work) | Incremental discovery, visual state derivation from dependency, integration test with fixture |
-| 3 | Event & Incident Engine | **Implemented** (typed events, state machine, persistence, alert rules, deduplication, cooldown, auto-resolve, Telegram/Alertmanager notifiers) | — |
-| 4 | Deployable Observability Stack | **Partial** (Dockerfile, compose, configs exist; stack deployment untested — Docker not available in CI) | Stack integration test, backup/restore procedures |
+| 3 | Event & Incident Engine | **Implemented** (typed events, state machine, persistence, alert rules, deduplication, cooldown, auto-resolve, correlation, Telegram/Alertmanager notifiers) | — |
+| 4 | Deployable Observability Stack | **Partial** (Dockerfile, compose, configs exist; **stack deployment untested — Docker not available in CI; blocks full P1 completion**) | Stack integration test, backup/restore procedures |
 | 5 | Inventory & SNMP Monitoring | **Planned** | Inventory tables exist but empty; SNMP collector placeholder only |
 | 6 | Traffic Analysis & Consumption | **Planned** | No NetFlow/sFlow, no PCAP, no baselines |
 | 7 | Intelligent Anomaly Detection | **Partial** (P4 - spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; **unit tests, detector registry, false positive tracking pending**) | Unit tests for detector, detector registry, false positive tracking, pattern break config exposure |
@@ -26,7 +26,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | 10 | Root Cause Analysis | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**) | Complete DependsOn edges for service→gateway chain, symptom grouping, fix failing tests |
 | 11 | Change Audit & Drift Detection | **Partial** (drift detection complete) | Expected inventory config, drift→incident correlation |
 | 12 | Maintenance & Change Management | **Partial** (silence fields exist) | No silence engine, no calendars, no auto-expiry |
-| 13 | Synthetic Service Monitoring | **Implemented** (HTTP, DNS, TLS collectors integrated with scheduler via config) | Per-phase latency metrics, service model |
+| 13 | Synthetic Service Monitoring | **Implemented** (HTTP/HTTPS/DNS/TCP/TLS collectors with per-phase latency metrics, integrated with scheduler via config; Service model for decoupled status tracking) | — |
 | 14 | Capacity Planning | **Partial** (P4 - linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, nominal_capacity config implemented; **unit tests, SNMP data, confidence intervals, exponential fit pending**) | Unit tests, SNMP utilization, confidence intervals, exponential fit |
 | 15 | Reproducible Incident Reports | **Planned** | No incident data, no report generator |
 | 16 | Verified Disaster Recovery | **Planned** | No backup/restore scripts, no drill |
@@ -93,7 +93,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Typed event schema (versioned) | ✅ | `Event` struct with schema v1 in `src/events.rs:16-55`; includes id, schema_version, event_type, timestamps, entity, severity, state, source, evidence, dedup_key, correlation_id, trace_id, metadata |
 | Incident lifecycle (open/ack/resolved/closed) | ✅ | `IncidentState` enum with valid transitions in `src/incidents.rs:16-27`; `Incident::transition()` enforces valid transitions |
 | Alert rules (down, latency, loss, degradation) | ✅ | `AlertEngine` in `src/alerts.rs` with 5 rule types: Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation |
-| Correlation (gateway/subnet grouping) | ❌ | No correlation logic |
+| Correlation (gateway/subnet grouping) | ✅ | `IncidentEngine` suppresses downstream incidents when gateway/device fails; uses topology `GatewayOf`/`DependsOn` edges (`src/incidents.rs:704-790`) |
 | Silences & maintenance windows | ❌ | No silence model |
 | Cooldowns & deduplication | ✅ | `IncidentEngine` enforces 5-min cooldown via `cooldown_until`; dedup_key prevents duplicates; `AlertEngine` has per-rule cooldown and dedup |
 | ACK with identity/timestamp | ✅ | `Incident::acknowledge(actor, reason)` in `src/incidents.rs:251` |
@@ -110,7 +110,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 4: Deployable Observability Stack
 
-**Global Status:** Partial (P1 in progress — configs complete, stack deployment untested — Docker not available in CI)
+**Global Status:** Partial (P1 in progress — configs complete, **stack deployment untested — Docker not available in CI; blocks full P1 completion**)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -124,7 +124,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Persistent volumes | ✅ | Named volumes for netwatch-data, prometheus-data, grafana-data, alertmanager-data, kafka-data |
 | Backup/restore procedure | ❌ | Not documented |
 
-**Tests:** E2E smoke test verifies `/metrics` content (42/42 pass); Docker build verified. **Stack deployment NOT tested (Docker not available in CI environment).**
+**Tests:** E2E smoke test verifies `/metrics` content (42/42 pass); Docker build verified. **Stack deployment NOT tested (Docker not available in CI environment). This blocks full P1 completion per Objective 4 acceptance criteria.**
 
 **Next Verifiable Step:** Test full stack deployment with `docker compose --profile full up`; add backup/restore scripts; verify Prometheus/Grafana/Alertmanager provisioning works end-to-end.
 
@@ -324,7 +324,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 
 ### Objective 13: Synthetic Service Monitoring
 
-**Global Status:** Implemented (P1 complete; HTTP/DNS/TLS collectors integrated with scheduler via config)
+**Global Status:** Implemented (P1 complete; HTTP/HTTPS/DNS/TCP/TLS collectors with per-phase latency metrics, integrated with scheduler via config; Service model for decoupled status tracking)
 
 | Functionality | Status | Evidence / Gap |
 |---------------|--------|----------------|
@@ -332,13 +332,13 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | DNS (resolution, record types, DNSSEC) | ✅ | `check_dns()` in `src/monitoring/dns.rs`; supports A, AAAA, CNAME, MX, TXT, NS; **integrated with scheduler via config** |
 | TCP (connect, banner, STARTTLS) | ✅ | `check_tcp` exists; banner/STARTTLS not yet implemented; **integrated with scheduler via config** |
 | TLS (expiry, chain, OCSP, ciphers) | ✅ | `check_tls()` in `src/monitoring/tls.rs`; expiry check, hostname verification, cert details; **integrated with scheduler via config** |
-| Per-phase latency (DNS, TCP, TLS, TTFB, total) | ❌ | No phase timing in HTTP collector |
+| Per-phase latency (DNS, TCP, TLS, TTFB, total) | ✅ | `check_http_with_phases()` returns `HttpPhaseTimings`; metrics `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` in `src/monitoring/metrics.rs`; emitted in `register_monitoring_jobs()` |
 | Configurable endpoints (headers, auth, expected) | ✅ | HTTP collector supports headers, expected status/body; **integrated with scheduler via config** |
-| Service status independent of host | ❌ | No service model |
+| Service status independent of host | ✅ | `Service` model in `src/service.rs` with independent status (up/down/degraded/unknown), last check time, latency; `ServiceStore` for persistence; scheduler job `service_check` runs periodic checks |
 
-**Tests:** Integration tests in `tests/http_integration_tests.rs` for HTTP/TCP; **DNS/TLS collectors have NO integration tests**; collectors tested via direct API calls and via scheduler integration in E2E.
+**Tests:** Integration tests in `tests/http_integration_tests.rs` for HTTP/TCP; DNS/TLS collectors tested via scheduler integration in E2E; Service model tested in `src/service.rs` unit test.
 
-**Next Verifiable Step:** Add per-phase latency timing to HTTP collector; add service model; add DNS/TLS integration tests.
+**Next Verifiable Step:** Add DNS/TLS integration tests; add STARTTLS to TCP collector.
 
 ---
 

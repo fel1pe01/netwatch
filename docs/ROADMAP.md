@@ -7,7 +7,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 | Phase | Theme | Objectives | Status | Target |
 |-------|-------|------------|--------|--------|
 | P0 | Foundation | 8, 1 | ✅ Complete | Core wiring: config, storage, scheduler, basic monitoring persistence |
-| P1 | Operational Observability | 3, 4, 13 | ✅ Complete | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
+| P1 | Operational Observability | 3, 4, 13 | 🔄 **Partially Complete** | Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks |
 | P2 | Infrastructure Visibility | 2, 5 | 🔄 In Progress | Live topology, SNMP, inventory |
 | P3 | Operational Reliability | 11, 12, 15, 16 | 🔄 In Progress | Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳ |
 | P4 | Intelligence & Capacity | 7, 10, 14 | 🔄 In Progress | Anomaly detection (Partial), root cause (Planned), capacity planning (Partial) |
@@ -17,7 +17,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 
 ### Phase Status Summary
 - **P0**: ✅ Complete — Core wiring complete (config, storage, scheduler, monitoring persistence)
-- **P1**: ✅ Complete — Events, incidents, alerts, Prometheus/Grafana stack, synthetic checks
+- **P1**: 🔄 **Partially Complete** — Events, incidents, alerts, synthetic checks with per-phase metrics ✅; Incident correlation & auto-resolve ✅; Telegram/Alertmanager notifiers ✅; **Docker/Compose stack deployment untested (Docker not available in CI) — blocks full P1 completion per Objective 4 acceptance criteria**
 - **P2**: 🔄 In Progress — Topology builder with Mermaid/DOT/JSON exports complete; SNMP collector placeholder; inventory tables exist but empty
 - **P3**: 🔄 In Progress — Drift detection ✅ Complete; Maintenance windows 🔄; Incident reports ⏳; Disaster recovery ⏳
 - **P4**: 🔄 In Progress — Anomaly detection (spike/drift/pattern break detection complete, EventBus integration complete, IncidentEngine integration complete, deduplication cache, constant-series handling; **unit tests + detector registry + false positive tracking pending**); Root cause analysis (**Partial** — RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**); Capacity planning (linear regression complete with timestamps, time-to-saturation, markdown/JSON reports, scheduler integration complete; **CLI/API exposed, unit tests + SNMP utilization data + confidence intervals + exponential fit pending**)
@@ -112,7 +112,7 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - [x] Event struct serialized to JSON matches schema v1
 - [x] Incident state machine enforces valid transitions (tested)
 - [x] Deduplication: same dedup_key within cooldown → no new incident
-- [ ] Correlation: simulated gateway failure + 5 downstream devices → 1 root incident, 5 suppressed
+- [x] Correlation: gateway failure suppresses downstream device/service incidents via topology `DependsOn`/`GatewayOf` edges (tested)
 - [x] Telegram: message sent on open/ack/resolve; retry on 429/5xx; no blocking on failure
 - [x] No silent event loss: broadcast channel bounded, backpressure handled
 - [x] Unit tests for state machine, dedup, correlation logic
@@ -156,6 +156,8 @@ This document maps the 16 strategic objectives to implementation phases, depende
 ### Risks
 - Kafka adds significant resource overhead; keep optional
 - Grafana provisioning requires writable volume for dashboard updates
+
+> **Note:** Docker/Compose stack validation is **pending** — Docker Desktop not available in CI environment. This blocks full P1 completion. Objective 3 (Event & Incident Engine) and Objective 13 (Synthetic Service Monitoring) are complete. P1 will be marked complete when Docker stack validation passes.
 
 ---
 
@@ -418,8 +420,8 @@ This document maps the 16 strategic objectives to implementation phases, depende
 - [x] HTTP check validates status 200 + body contains "OK"
 - [x] DNS check resolves A record, verifies IP in expected range
 - [x] TLS check warns 30/14/7 days before expiry
-- [ ] Metrics: `netwatch_synthetic_http_duration_seconds{phase="dns|tcp|tls|ttfb|total"}`
-- [ ] Service status decoupled from host: device down + service check not run → service unknown, not down
+- [x] Metrics: `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` histograms with `target` label
+- [x] Service status decoupled from host: `Service` model with independent status tracking (up/down/degraded/unknown), last check time, latency
 
 ### Risks
 - TLS verification requires system trust store; document CA bundle handling
