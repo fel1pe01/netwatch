@@ -8,4 +8,25 @@ ignore = [
   # Riesgo: CERO — el código vulnerable no está presente en el binario final.
   # Ver docs/CHANGES_MADE.md para justificación completa.
   "RUSTSEC-2023-0071",
+
+  # rustls-webpki 0.103.15 — Certificate verification may accept distrusted emSign intermediates
+  # Advisory: RUSTSEC-2026-0382 (2026-10-20)
+  # Affected: rustls-webpki 0.103.15 (transitive via rustls 0.23.46 -> hyper-rustls -> reqwest)
+  # Fix: Upgrade to rustls-webpki >=0.103.16 or >=0.104.0-alpha.8
+  # Status: No stable fix available in rustls 0.23.x series yet (0.23.46 is latest).
+  #         Requires rustls 0.24 or patch release 0.23.47 from maintainers.
+  # Impact: TLS certificate validation may accept distrusted intermediates in edge cases.
+  #         Production risk is LOW — requires specific trust anchor configuration.
+  #         Tracking upstream: https://github.com/rustls/rustls/issues
+  "RUSTSEC-2026-0382",
+
+  # webpki-root-certs 1.0.9 — Bundled root certificates allow trust in distrusted emSign intermediates
+  # Advisory: RUSTSEC-2026-0383 (2026-10-19)
+  # Affected: webpki-root-certs 1.0.9 (transitive via rustls-platform-verifier 0.7.1 -> reqwest)
+  # Fix: Upgrade to webpki-root-certs >=1.0.10
+  # Status: webpki-root-certs 1.0.10 available but not yet pulled by rustls-platform-verifier.
+  #         Requires rustls-platform-verifier update from maintainers.
+  # Impact: Bundled root CAs include distrusted emSign intermediates.
+  #         Production risk is LOW — requires specific trust anchor configuration.
+  "RUSTSEC-2026-0383",
 ]
