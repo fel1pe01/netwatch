@@ -414,3 +414,70 @@ docs/CHANGES_MADE.md                    (This file - added security fixes sectio
 ```
 
 ---
+
+## AlreadyReg Metrics Fix (2026-10-24)
+
+**Date:** 2026-10-24
+**Implementation Session:** P1 Operational Observability — Permanent fix for AlreadyReg duplicate metric registration
+
+---
+
+### Problem
+
+The Docker build was using a Python script (PYFIX) to patch `src/metrics.rs` at build time, removing duplicate registrations of `netwatch_scheduler_jobs_total` and `netwatch_scheduler_errors_total` metrics. These metrics were being registered twice:
+
+1. In `src/metrics.rs` (`AppMetrics::new()`) — as `IntCounter` (no labels)
+2. In `src/monitoring/metrics.rs` — as `CounterVec` with `job` label (used by scheduler)
+
+This caused a Prometheus `AlreadyReg` error when both tried to register with the default registry.
+
+### Root Cause
+
+- `src/monitoring/metrics.rs` defines `NETWATCH_SCHEDULER_JOBS_TOTAL` and `NETWATCH_SCHEDULER_ERRORS_TOTAL` as `Lazy<CounterVec>` using `register_counter_vec!` macro, which automatically registers them with the default Prometheus registry at module load time.
+- `src/metrics.rs` `AppMetrics::new()` manually created `IntCounter` instances with the same metric names and attempted to register them again via `registry.register()`.
+- The `AppMetrics` versions were never actually used (no code called `.inc()` on them), while the scheduler uses the `CounterVec` versions from `monitoring/metrics.rs` with job labels.
+
+### Solution
+
+**1. Fixed `src/metrics.rs`:**
+- Removed `jobs_total` and `errors_total` fields from `AppMetrics` struct
+- Removed their creation and registration code from `AppMetrics::new()`
+- Removed them from `Default` and `Clone` implementations
+- Kept only `info`, `uptime`, and `start_time` fields (the actual app-level metrics)
+
+**2. Updated `Dockerfile`:**
+- Removed the entire PYFIX Python script block (lines 26-54) that patched `src/metrics.rs` at build time
+- Docker now builds the corrected source directly without any automatic modifications
+
+**3. Updated test expectations in `tests/http_integration_tests.rs`:**
+- Modified `http_metrics_endpoint_before_checks` test to not expect scheduler metrics before jobs run
+- Scheduler metrics (`CounterVec` with labels) only appear when `.inc()` is called with label values
+- AppMetrics now only exposes `netwatch_info` and `netwatch_uptime_seconds` unconditionally
+
+### Files Changed
+
+```
+src/metrics.rs                          (Removed duplicate scheduler metrics)
+Dockerfile                              (Removed PYFIX patch block)
+tests/http_integration_tests.rs         (Updated test expectations)
+docs/CHANGES_MADE.md                    (This entry)
+```
+
+### Validation Results
+
+| Command | Result |
+|---------|--------|
+| `cargo fmt --check` | PASS |
+| `cargo check --locked --all-targets --all-features` | PASS |
+| `cargo test --locked --all-targets --all-features --no-fail-fast` | PASS (93 tests) |
+| `cargo clippy --locked --all-targets --all-features -- -D warnings` | PASS |
+| `cargo build --locked --release` | PASS |
+| `docker build --no-cache -t netwatch-test .` | PASS (no PYFIX, clean build) |
+
+### Impact
+
+- **Eliminates build-time source modification**: Docker now compiles the actual source code
+- **Cleaner metrics architecture**: Single source of truth for scheduler metrics in `monitoring/metrics.rs`
+- **Correct Prometheus semantics**: CounterVec metrics with labels only appear when used (standard Prometheus behavior)
+- **No functional regression**: Scheduler continues to record job metrics correctly; AppMetrics still exposes app info/uptime
+- **Reproducible builds**: No hidden patches; source code matches what runs in production

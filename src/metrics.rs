@@ -1,11 +1,9 @@
-use prometheus::{Encoder, IntCounter, IntGauge, Opts, TextEncoder};
+use prometheus::{Encoder, IntGauge, Opts, TextEncoder};
 use std::time::Instant;
 
 pub struct AppMetrics {
     pub info: IntGauge,
     pub uptime: IntGauge,
-    pub jobs_total: IntCounter,
-    pub errors_total: IntCounter,
     pub start_time: Instant,
 }
 
@@ -15,21 +13,12 @@ impl AppMetrics {
         let info = IntGauge::with_opts(info_opts).unwrap();
         let uptime_opts = Opts::new("netwatch_uptime_seconds", "uptime in seconds");
         let uptime = IntGauge::with_opts(uptime_opts).unwrap();
-        let jobs_opts = Opts::new(
-            "netwatch_scheduler_jobs_total",
-            "Total scheduler jobs started",
-        );
-        let jobs_total = IntCounter::with_opts(jobs_opts).unwrap();
-        let errors_opts = Opts::new("netwatch_scheduler_errors_total", "Total scheduler errors");
-        let errors_total = IntCounter::with_opts(errors_opts).unwrap();
 
         let start_time = Instant::now();
 
         let registry = prometheus::default_registry();
         let _ = registry.register(Box::new(info.clone()));
         let _ = registry.register(Box::new(uptime.clone()));
-        let _ = registry.register(Box::new(jobs_total.clone()));
-        let _ = registry.register(Box::new(errors_total.clone()));
 
         // Set initial uptime to 0
         uptime.set(0);
@@ -37,8 +26,6 @@ impl AppMetrics {
         Self {
             info,
             uptime,
-            jobs_total,
-            errors_total,
             start_time,
         }
     }
@@ -68,8 +55,6 @@ impl Clone for AppMetrics {
         Self {
             info: self.info.clone(),
             uptime: self.uptime.clone(),
-            jobs_total: self.jobs_total.clone(),
-            errors_total: self.errors_total.clone(),
             start_time: self.start_time,
         }
     }

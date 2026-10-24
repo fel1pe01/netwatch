@@ -50,6 +50,8 @@ RUN mkdir -p /data && chown netwatch:netwatch /data
 
 # Copy binary from builder
 COPY --from=builder /app/target/release/netwatch /usr/local/bin/netwatch
+COPY --from=builder /app/migrations /app/migrations
+COPY --from=builder /app/migrations /data/migrations
 
 # Switch to non-root user
 USER netwatch

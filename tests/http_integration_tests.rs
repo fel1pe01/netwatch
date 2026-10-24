@@ -193,12 +193,13 @@ async fn http_metrics_endpoint_before_checks() {
     assert_eq!(resp.status(), 200);
 
     let body = resp.text().await.unwrap();
+    // AppMetrics (netwatch_info, netwatch_uptime_seconds) must always be present
     assert!(body.contains("netwatch_info"));
     assert!(body.contains("netwatch_uptime_seconds"));
-    assert!(body.contains("netwatch_scheduler_jobs_total"));
-    assert!(body.contains("netwatch_scheduler_errors_total"));
-    // Health check metrics may be present from other tests due to shared registry
-    // but AppMetrics must always be present
+    // Scheduler metrics (netwatch_scheduler_jobs_total, netwatch_scheduler_errors_total)
+    // are CounterVec with 'job' label and only appear when scheduler jobs run.
+    // They are not part of AppMetrics anymore.
+    // Health check metrics may be present from other tests due to shared registry.
 }
 
 #[tokio::test]
