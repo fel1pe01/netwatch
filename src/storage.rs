@@ -30,7 +30,40 @@ impl Storage {
             .context("creating migrator")?;
         migrator.run(&pool).await.context("running migrations")?;
 
-        Ok(Storage { pool })
+        let storage = Storage { pool };
+        // Ensure the local device exists for legacy health check jobs
+        storage.ensure_local_device().await?;
+
+        Ok(storage)
+    }
+
+    /// Ensure the "local" device exists for legacy health check jobs
+    async fn ensure_local_device(&self) -> Result<()> {
+        use sqlx::query;
+        let now = Utc::now().to_rfc3339();
+        query(
+            r#"
+            INSERT INTO devices (id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                hostname = excluded.hostname,
+                ip = excluded.ip,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind("local")
+        .bind("local")
+        .bind("127.0.0.1")
+        .bind("")
+        .bind("loopback")
+        .bind("system")
+        .bind("high")
+        .bind(&now)
+        .bind(&now)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Persist a health check observation

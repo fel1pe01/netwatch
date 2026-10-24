@@ -454,10 +454,11 @@ test_metrics_before_checks() {
     stop_server
     start_server
 
+    # AppMetrics (netwatch_info, netwatch_uptime_seconds) must always be present
     assert_metrics_contains "netwatch_info" "Metrics: netwatch_info present"
     assert_metrics_contains "netwatch_uptime_seconds" "Metrics: netwatch_uptime_seconds present"
-    assert_metrics_contains "netwatch_scheduler_jobs_total" "Metrics: netwatch_scheduler_jobs_total present"
-    assert_metrics_contains "netwatch_scheduler_errors_total" "Metrics: netwatch_scheduler_errors_total present"
+    # Scheduler metrics (CounterVec with 'job' label) only appear when jobs run.
+    # They are not part of AppMetrics and may not be present immediately after startup.
 }
 
 test_metrics_after_icmp_check() {
@@ -537,7 +538,10 @@ test_app_metrics_no_labels() {
     local problems=0
     local metric line
 
-    for metric in "netwatch_info" "netwatch_uptime_seconds" "netwatch_scheduler_jobs_total" "netwatch_scheduler_errors_total"; do
+    # AppMetrics (netwatch_info, netwatch_uptime_seconds) should have no labels
+    # Scheduler metrics (netwatch_scheduler_jobs_total, netwatch_scheduler_errors_total)
+    # are CounterVec with 'job' label and are not part of AppMetrics.
+    for metric in "netwatch_info" "netwatch_uptime_seconds"; do
         while IFS= read -r line; do
             if [[ "${line}" == \#* ]] || [[ -z "${line}" ]]; then
                 continue

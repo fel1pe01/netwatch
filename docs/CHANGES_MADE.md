@@ -481,3 +481,52 @@ docs/CHANGES_MADE.md                    (This entry)
 - **Correct Prometheus semantics**: CounterVec metrics with labels only appear when used (standard Prometheus behavior)
 - **No functional regression**: Scheduler continues to record job metrics correctly; AppMetrics still exposes app info/uptime
 - **Reproducible builds**: No hidden patches; source code matches what runs in production
+
+---
+
+## Security Audit & SQLite E2E Fix (2026-10-24)
+
+**Date:** 2026-10-24
+**Implementation Session:** Post-release fix for RUSTSEC-2026-0385 and SQLite FOREIGN KEY constraint failure in E2E
+
+---
+
+### 1. Vulnerability Fix: RUSTSEC-2026-0385 (ctutils)
+
+**Problem:** `cargo audit` reported vulnerability RUSTSEC-2026-0385 in `ctutils` version 0.4.3 (transitive dependency via `digest` → `async-snmp`).
+
+**Root Cause:** The `ctutils` crate had a vulnerability fixed in version 0.4.4+. The lockfile was resolving to 0.4.3.
+
+**Solution:** Updated `ctutils` to 0.4.5 via `cargo update -p ctutils`. The dependency chain is:
+- `ctutils` 0.4.5 ← `digest` 0.11.3 ← `async-snmp` 0.18.1 ← `netwatch`
+
+**Validation:**
+- `cargo audit --no-fetch`: PASS (no vulnerabilities found)
+- `cargo deny check advisories`: PASS (advisories ok)
+- All tests pass (93 tests)
+
+**Files Changed:**
+- `Cargo.lock` (ctutils 0.4.3 → 0.4.5)
+
+---
+
+### 2. SQLite FOREIGN KEY Constraint Fix
+
+**Problem:** The E2E smoke test (`scripts/e2e_smoke.sh`) failed with:
+```
+ERROR netwatch: Failed to persist observation: error returned from database: (code: 787) FOREIGN KEY constraint failed
+```
+
+**Root Cause:** The legacy ICMP health check job (registered when `synthetic_checks.checks` is empty) uses `device_id = "local"` when persisting observations. However, the "local" device was never created in the `devices` table, causing a foreign key constraint violation on the `observations.device_id` → `devices(id)` relationship.
+
+**Solution:** Added `ensure_local_device()` method to `Storage` that creates the "local" device on database connection (after migrations). Called from `Storage::connect()`.
+
+**Validation:**
+- All 93 unit/integration tests pass
+- E2E smoke test: 40/40 tests pass (both debug and release binaries)
+- No FOREIGN KEY constraint errors in server logs
+- Scheduler jobs execute and persist observations correctly
+
+**Files Changed:**
+- `src/storage.rs` - Added `ensure_local_device()` method and call in `connect()`
+- `scripts/e2e_smoke.sh` - Updated metric test expectations to match actual Prometheus behavior (CounterVec metrics only appear when used)
