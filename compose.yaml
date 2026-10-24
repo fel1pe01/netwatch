@@ -13,7 +13,7 @@ services:
       - core
       - full
     ports:
-      - "${NETWATCH_PORT:-8080}:8080"
+      - "${NETWATCH_PORT:-8085}:8080"
     volumes:
       - netwatch-data:/data
       - ./config.example.yaml:/data/netwatch.yaml:ro

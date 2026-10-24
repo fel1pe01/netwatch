@@ -8,6 +8,9 @@ agent:
 storage:
   path: "/data/netwatch.sqlite"
 
+metrics:
+  enabled: true
+
 api:
   enabled: true
 

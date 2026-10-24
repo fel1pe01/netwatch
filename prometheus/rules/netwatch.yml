@@ -49,61 +49,61 @@ groups:
           summary: "High p95 latency for {{ $labels.protocol }}"
           description: "p95 latency for {{ $labels.protocol }} is {{ $value }}s"
 
-      # Collector errors
-      - alert: NetwatchCollectorError
-        expr: rate(netwatch_collector_errors_total[5m]) > 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Collector errors detected"
-          description: "Collector {{ $labels.collector }} has errors: {{ $labels.error }}"
+      # Collector errors - NOT IMPLEMENTED YET
+      # - alert: NetwatchCollectorError
+      #   expr: rate(netwatch_collector_errors_total[5m]) > 0
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #   annotations:
+      #     summary: "Collector errors detected"
+      #     description: "Collector {{ $labels.collector }} has errors: {{ $labels.error }}"
 
-      # Storage errors
-      - alert: NetwatchStorageErrors
-        expr: rate(netwatch_storage_errors_total[5m]) > 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Storage errors detected"
-          description: "Storage layer reporting errors at rate {{ $value }}/s"
+      # Storage errors - NOT IMPLEMENTED YET
+      # - alert: NetwatchStorageErrors
+      #   expr: rate(netwatch_storage_errors_total[5m]) > 0
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #   annotations:
+      #     summary: "Storage errors detected"
+      #     description: "Storage layer reporting errors at rate {{ $value }}/s"
 
-      # Incident alerts
-      - alert: NetwatchOpenIncidents
-        expr: count(netwatch_incidents_open) > 10
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High number of open incidents"
-          description: "There are {{ $value }} open incidents"
+      # Incident alerts - NOT IMPLEMENTED YET (metrics not exposed)
+      # - alert: NetwatchOpenIncidents
+      #   expr: count(netwatch_incidents_open) > 10
+      #   for: 5m
+      #   labels:
+      #     severity: warning
+      #   annotations:
+      #     summary: "High number of open incidents"
+      #     description: "There are {{ $value }} open incidents"
 
-      - alert: NetwatchCriticalIncident
-        expr: count(netwatch_incidents_open{severity="critical"}) > 0
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Critical incident open"
-          description: "There is at least one critical incident open"
+      # - alert: NetwatchCriticalIncident
+      #   expr: count(netwatch_incidents_open{severity="critical"}) > 0
+      #   for: 0m
+      #   labels:
+      #     severity: critical
+      #   annotations:
+      #     summary: "Critical incident open"
+      #     description: "There is at least one critical incident open"
 
-      # Discovery changes
-      - alert: NetwatchTopologyChanges
-        expr: rate(netwatch_topology_changes_total[1h]) > 5
-        for: 5m
-        labels:
-          severity: info
-        annotations:
-          summary: "Frequent topology changes detected"
-          description: "Topology change rate is {{ $value }} per hour"
+      # Discovery changes - NOT IMPLEMENTED YET
+      # - alert: NetwatchTopologyChanges
+      #   expr: rate(netwatch_topology_changes_total[1h]) > 5
+      #   for: 5m
+      #   labels:
+      #     severity: info
+      #   annotations:
+      #     summary: "Frequent topology changes detected"
+      #     description: "Topology change rate is {{ $value }} per hour"
 
-      # Configuration changes
-      - alert: NetwatchConfigChanged
-        expr: rate(netwatch_config_changes_total[1h]) > 0
-        for: 0m
-        labels:
-          severity: info
-        annotations:
-          summary: "Configuration changed"
-          description: "Netwatch configuration was modified"
+      # Configuration changes - NOT IMPLEMENTED YET
+      # - alert: NetwatchConfigChanged
+      #   expr: rate(netwatch_config_changes_total[1h]) > 0
+      #   for: 0m
+      #   labels:
+      #     severity: info
+      #   annotations:
+      #     summary: "Configuration changed"
+      #     description: "Netwatch configuration was modified"
