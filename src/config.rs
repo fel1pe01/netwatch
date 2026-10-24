@@ -49,7 +49,9 @@ pub struct SnmpConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TelegramConfig {
     pub enabled: bool,
+    #[serde(default)]
     pub bot_token: String,
+    #[serde(default)]
     pub chat_id: String,
     #[serde(default = "default_parse_mode")]
     pub parse_mode: String,
