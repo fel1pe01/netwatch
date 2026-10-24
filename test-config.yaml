@@ -1,0 +1,59 @@
+agent:
+  name: "netwatch"
+  listen: "0.0.0.0:8080"
+
+storage:
+  path: "/data/netwatch.sqlite"
+
+metrics:
+  enabled: true
+
+api:
+  enabled: true
+
+logging:
+  level: "info"
+
+discovery:
+  enabled: false
+  interval: 300
+
+health:
+  interval: 15
+
+snmp:
+  enabled: false
+  interval: 60
+
+scheduler:
+  concurrency: 10
+
+capacity:
+  enabled: true
+  interval: 3600
+
+anomaly:
+  enabled: true
+  interval: 300
+  min_samples: 10
+  lookback_window_seconds: 3600
+  sensitivity: 1.0
+  min_z_score: 3.0
+  enable_spike_detection: true
+  enable_drift_detection: true
+  enable_pattern_break_detection: false
+  anomaly_cooldown_seconds: 300
+  min_absolute_change: 10.0
+
+alert:
+  enabled: true
+  interval: 60
+  rules: []
+
+synthetic_checks:
+  enabled: true
+  interval: 60
+  checks: []
+
+telegram:
+  enabled: false
