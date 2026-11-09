@@ -1,5 +1,7 @@
+use crate::monitoring::validation::{validation_error_result, ValidatedTarget};
 use crate::monitoring::HealthCheckResult;
-use anyhow::Result;
+use crate::ssrf::SsrfPolicy;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -23,6 +25,45 @@ pub async fn check_tcp(host: &str, port: u16, timeout_ms: u64) -> Result<HealthC
     let now = Utc::now();
     Ok(HealthCheckResult {
         target: addr,
+        protocol: "tcp".to_string(),
+        timestamp: now,
+        success,
+        latency_ms,
+        error,
+        observed_at: now,
+        timeout_ms,
+        evidence: "tcp_probe".to_string(),
+    })
+}
+
+/// TCP connectivity check with SSRF validation
+pub async fn check_tcp_with_ssrf(
+    policy: &SsrfPolicy,
+    host: &str,
+    port: u16,
+    timeout_ms: u64,
+) -> Result<HealthCheckResult> {
+    // Validate target against SSRF policy
+    let validated = ValidatedTarget::new(policy, host, port).await?;
+
+    // Use the first resolved IP for the actual connection
+    let sock_addr = validated
+        .primary_addr()
+        .ok_or_else(|| anyhow::anyhow!("No valid resolved addresses"))?;
+
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
+    let result = timeout(timeout_duration, TcpStream::connect(sock_addr)).await;
+    let elapsed_ms = start.elapsed().as_millis();
+    let (success, error) = match result {
+        Ok(Ok(_stream)) => (true, None),
+        Ok(Err(e)) => (false, Some(e.to_string())),
+        Err(_) => (false, Some("timeout".to_string())),
+    };
+    let latency_ms = if success { Some(elapsed_ms) } else { None };
+    let now = Utc::now();
+    Ok(HealthCheckResult {
+        target: format!("{}:{}", host, port),
         protocol: "tcp".to_string(),
         timestamp: now,
         success,

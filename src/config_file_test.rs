@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{expand_env_vars, Config};
 use std::fs;
 use tempfile::tempdir;
 
@@ -58,6 +58,19 @@ telegram:
   timeout_seconds: 10
   max_retries: 3
   retry_backoff_seconds: 5
+auth:
+  enabled: true
+  tokens: {}
+  public_paths:
+    - "/health"
+    - "/metrics"
+  token_header: "Authorization"
+tls:
+  enabled: false
+ssrf:
+  enabled: true
+rate_limit:
+  enabled: true
 "#;
 
     fs::write(&config_path, yaml_content).unwrap();
@@ -135,4 +148,56 @@ agent:
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("Failed to parse YAML") || err.contains("missing field"));
+}
+
+#[test]
+fn test_expand_env_vars_simple() {
+    std::env::set_var("TEST_VAR", "test_value");
+    let input = "value: ${TEST_VAR}";
+    let result = expand_env_vars(input).unwrap();
+    assert_eq!(result, "value: test_value");
+    std::env::remove_var("TEST_VAR");
+}
+
+#[test]
+fn test_expand_env_vars_with_default() {
+    let input = "value: ${MISSING_VAR:-default_value}";
+    let result = expand_env_vars(input).unwrap();
+    assert_eq!(result, "value: default_value");
+}
+
+#[test]
+fn test_expand_env_vars_missing_required() {
+    let input = "value: ${MISSING_REQUIRED_VAR}";
+    let result = expand_env_vars(input);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Required environment variable"));
+}
+
+#[test]
+fn test_expand_env_vars_multiple() {
+    std::env::set_var("VAR1", "value1");
+    std::env::set_var("VAR2", "value2");
+    let input = "v1: ${VAR1}, v2: ${VAR2}";
+    let result = expand_env_vars(input).unwrap();
+    assert_eq!(result, "v1: value1, v2: value2");
+    std::env::remove_var("VAR1");
+    std::env::remove_var("VAR2");
+}
+
+#[test]
+fn test_expand_env_vars_no_vars() {
+    let input = "plain text without variables";
+    let result = expand_env_vars(input).unwrap();
+    assert_eq!(result, "plain text without variables");
+}
+
+#[test]
+fn test_expand_env_vars_empty_default() {
+    let input = "value: ${MISSING_VAR:-}";
+    let result = expand_env_vars(input).unwrap();
+    assert_eq!(result, "value: ");
 }

@@ -4,6 +4,7 @@ pub mod icmp;
 pub mod metrics;
 pub mod tcp;
 pub mod tls;
+pub mod validation;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct HealthCheckResult {

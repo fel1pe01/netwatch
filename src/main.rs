@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use netwatch::alerts::{AlertEngine, AlertEngineConfig};
 use netwatch::anomaly::{AnomalyConfig as AnomalyDetectorConfig, AnomalyDetector};
 use netwatch::api::router as api_router;
+use netwatch::auth::{AuthConfig, AuthState};
 use netwatch::capacity_planning::{CapacityConfig, CapacityPlanner};
 use netwatch::config::{Config, SyntheticCheckType};
 use netwatch::discovery::interfaces::discover_interfaces;
@@ -18,10 +19,13 @@ use netwatch::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
 use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
+use netwatch::rate_limit::{RateLimitConfig, RateLimiter};
 use netwatch::scheduler::Scheduler;
 use netwatch::service::ServiceStore;
 use netwatch::snmp::SnmpCollector;
+use netwatch::ssrf::SsrfState;
 use netwatch::storage::Storage;
+use netwatch::tls::TlsConfig;
 use netwatch::topology_builder::TopologyBuilder;
 use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
@@ -31,6 +35,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
+use tokio_rustls::TlsAcceptor;
 use uuid::Uuid;
 
 /// Netwatch CLI
@@ -83,6 +88,7 @@ async fn register_monitoring_jobs(
     storage: Arc<Storage>,
     event_bus: Arc<EventBus>,
     config: &Config,
+    ssrf_policy: Arc<netwatch::ssrf::SsrfPolicy>,
 ) -> Result<()> {
     use netwatch::monitoring::metrics::{
         HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
@@ -90,10 +96,19 @@ async fn register_monitoring_jobs(
         SYNTHETIC_CHECK_TLS_DURATION_SECONDS, SYNTHETIC_CHECK_TOTAL,
         SYNTHETIC_CHECK_TOTAL_DURATION_SECONDS, SYNTHETIC_CHECK_TTFB_DURATION_SECONDS,
     };
+    use netwatch::monitoring::validation::{validation_error_result, ValidatedTarget};
     use netwatch::monitoring::{
         check_dns, check_http_with_phases, check_tls, ping, HttpPhaseTimings,
     };
+    use netwatch::ssrf::SsrfConfig;
     use std::time::Duration;
+
+    // Create internal SSRF policy for legacy health checks (allows loopback)
+    let internal_ssrf_config = SsrfConfig {
+        allow_loopback: true,
+        ..config.ssrf.clone()
+    };
+    let internal_ssrf_policy = Arc::new(netwatch::ssrf::SsrfPolicy::new(internal_ssrf_config)?);
 
     // Register synthetic checks from config
     if config.synthetic_checks.enabled.unwrap_or(true) {
@@ -107,6 +122,7 @@ async fn register_monitoring_jobs(
             let storage = storage.clone();
             let event_bus = event_bus.clone();
             let check_config = check.clone();
+            let policy = ssrf_policy.clone();
             let job_name = format!("synthetic_check_{}", check.id);
 
             let job = netwatch::scheduler::Job {
@@ -116,20 +132,22 @@ async fn register_monitoring_jobs(
                     let storage = storage.clone();
                     let event_bus = event_bus.clone();
                     let check = check_config.clone();
+                    let policy = policy.clone();
                     Box::pin(async move {
-                        let (res, proto, phase_timings) =
-                            match check.check_type {
-                                SyntheticCheckType::Http | SyntheticCheckType::Https => {
-                                    let url = if check.check_type == SyntheticCheckType::Https {
-                                        format!("https://{}", check.target)
-                                    } else {
-                                        format!("http://{}", check.target)
-                                    };
-                                    let timeout = check.timeout_ms.unwrap_or(5000);
-                                    let expected_status = check.expected_status;
-                                    let expected_body = check.expected_body.clone();
-                                    let headers = check.headers.clone().unwrap_or_default();
-                                    let (res, phases) = check_http_with_phases(
+                        let (res, proto, phase_timings) = match check.check_type {
+                            SyntheticCheckType::Http | SyntheticCheckType::Https => {
+                                let url = if check.check_type == SyntheticCheckType::Https {
+                                    format!("https://{}", check.target)
+                                } else {
+                                    format!("http://{}", check.target)
+                                };
+                                let timeout = check.timeout_ms.unwrap_or(5000);
+                                let expected_status = check.expected_status;
+                                let expected_body = check.expected_body.clone();
+                                let headers = check.headers.clone().unwrap_or_default();
+                                let (res, phases) =
+                                    netwatch::monitoring::http::check_http_with_phases_ssrf(
+                                        &policy,
                                         &url,
                                         timeout,
                                         expected_status,
@@ -139,101 +157,82 @@ async fn register_monitoring_jobs(
                                     .await
                                     .unwrap_or_else(|e| {
                                         (
-                                            HealthCheckResult {
-                                                target: url.clone(),
-                                                protocol: if check.check_type
-                                                    == SyntheticCheckType::Https
-                                                {
-                                                    "https"
-                                                } else {
-                                                    "http"
-                                                }
-                                                .to_string(),
-                                                timestamp: Utc::now(),
-                                                success: false,
-                                                latency_ms: None,
-                                                error: Some(e.to_string()),
-                                                observed_at: Utc::now(),
-                                                timeout_ms: timeout,
-                                                evidence: "http_probe".to_string(),
-                                            },
+                                            validation_error_result(&url, &proto, timeout, e),
                                             HttpPhaseTimings::default(),
                                         )
                                     });
-                                    (
-                                        res,
-                                        if check.check_type == SyntheticCheckType::Https {
-                                            "https"
-                                        } else {
-                                            "http"
-                                        }
-                                        .to_string(),
-                                        Some(phases),
-                                    )
-                                }
-                                SyntheticCheckType::Dns => {
-                                    let timeout = check.timeout_ms.unwrap_or(5000);
-                                    let record_type = check.record_type.clone();
-                                    let res = check_dns(&check.target, record_type, None, timeout)
-                                        .await
-                                        .unwrap_or_else(|e| HealthCheckResult {
-                                            target: format!("{} (DNS)", check.target),
-                                            protocol: "dns".to_string(),
-                                            timestamp: Utc::now(),
-                                            success: false,
-                                            latency_ms: None,
-                                            error: Some(e.to_string()),
-                                            observed_at: Utc::now(),
-                                            timeout_ms: timeout,
-                                            evidence: "dns_probe".to_string(),
-                                        });
-                                    (res, "dns".to_string(), None)
-                                }
-                                SyntheticCheckType::Tcp => {
-                                    let port = check.port.unwrap_or(80);
-                                    let timeout = check.timeout_ms.unwrap_or(5000);
-                                    let res = check_tcp(&check.target, port, timeout)
-                                        .await
-                                        .unwrap_or_else(|e| HealthCheckResult {
-                                            target: format!("{}:{}", check.target, port),
-                                            protocol: "tcp".to_string(),
-                                            timestamp: Utc::now(),
-                                            success: false,
-                                            latency_ms: None,
-                                            error: Some(e.to_string()),
-                                            observed_at: Utc::now(),
-                                            timeout_ms: timeout,
-                                            evidence: "tcp_probe".to_string(),
-                                        });
-                                    (res, "tcp".to_string(), None)
-                                }
-                                SyntheticCheckType::Tls => {
-                                    let port = check.port.unwrap_or(443);
-                                    let timeout = check.timeout_ms.unwrap_or(5000);
-                                    let check_expiry_days = check.check_expiry_days;
-                                    let verify_hostname = check.verify_hostname.unwrap_or(true);
-                                    let res = check_tls(
-                                        &check.target,
-                                        port,
+                                (
+                                    res,
+                                    if check.check_type == SyntheticCheckType::Https {
+                                        "https"
+                                    } else {
+                                        "http"
+                                    }
+                                    .to_string(),
+                                    Some(phases),
+                                )
+                            }
+                            SyntheticCheckType::Dns => {
+                                let timeout = check.timeout_ms.unwrap_or(5000);
+                                let record_type = check.record_type.clone();
+                                let res = netwatch::monitoring::dns::check_dns_with_ssrf(
+                                    &policy,
+                                    &check.target,
+                                    record_type,
+                                    None,
+                                    timeout,
+                                )
+                                .await
+                                .unwrap_or_else(|e| {
+                                    validation_error_result(&check.target, "dns", timeout, e)
+                                });
+                                (res, "dns".to_string(), None)
+                            }
+                            SyntheticCheckType::Tcp => {
+                                let port = check.port.unwrap_or(80);
+                                let timeout = check.timeout_ms.unwrap_or(5000);
+                                let res = netwatch::monitoring::tcp::check_tcp_with_ssrf(
+                                    &policy,
+                                    &check.target,
+                                    port,
+                                    timeout,
+                                )
+                                .await
+                                .unwrap_or_else(|e| {
+                                    validation_error_result(
+                                        &format!("{}:{}", check.target, port),
+                                        "tcp",
                                         timeout,
-                                        check_expiry_days,
-                                        verify_hostname,
+                                        e,
                                     )
-                                    .await
-                                    .unwrap_or_else(|e| HealthCheckResult {
-                                        target: format!("{}:{}", check.target, port),
-                                        protocol: "tls".to_string(),
-                                        timestamp: Utc::now(),
-                                        success: false,
-                                        latency_ms: None,
-                                        error: Some(e.to_string()),
-                                        observed_at: Utc::now(),
-                                        timeout_ms: timeout,
-                                        evidence: "tls_probe".to_string(),
-                                    });
-                                    (res, "tls".to_string(), None)
-                                }
-                            };
+                                });
+                                (res, "tcp".to_string(), None)
+                            }
+                            SyntheticCheckType::Tls => {
+                                let port = check.port.unwrap_or(443);
+                                let timeout = check.timeout_ms.unwrap_or(5000);
+                                let check_expiry_days = check.check_expiry_days;
+                                let verify_hostname = check.verify_hostname.unwrap_or(true);
+                                let res = netwatch::monitoring::tls::check_tls_with_ssrf(
+                                    &policy,
+                                    &check.target,
+                                    port,
+                                    timeout,
+                                    check_expiry_days,
+                                    verify_hostname,
+                                )
+                                .await
+                                .unwrap_or_else(|e| {
+                                    validation_error_result(
+                                        &format!("{}:{}", check.target, port),
+                                        "tls",
+                                        timeout,
+                                        e,
+                                    )
+                                });
+                                (res, "tls".to_string(), None)
+                            }
+                        };
 
                         // Record synthetic check metrics
                         let result_label = if res.success { "success" } else { "failure" };
@@ -309,29 +308,24 @@ async fn register_monitoring_jobs(
     if !has_synthetic_checks && config.health.interval > 0 {
         let interval = Duration::from_secs(config.health.interval);
 
-        // ICMP health check job (legacy)
+        // ICMP health check job (legacy) - uses internal SSRF policy that allows loopback
         let storage = storage.clone();
         let event_bus = event_bus.clone();
+        let internal_policy = internal_ssrf_policy.clone();
         let job = netwatch::scheduler::Job {
             name: "health_check_icmp".to_string(),
             interval,
             task: Arc::new(move || {
                 let storage = storage.clone();
                 let event_bus = event_bus.clone();
+                let policy = internal_policy.clone();
                 Box::pin(async move {
-                    let res = ping("127.0.0.1", 2000)
-                        .await
-                        .unwrap_or_else(|e| HealthCheckResult {
-                            target: "127.0.0.1".to_string(),
-                            protocol: "icmp".to_string(),
-                            timestamp: Utc::now(),
-                            success: false,
-                            latency_ms: None,
-                            error: Some(e.to_string()),
-                            observed_at: Utc::now(),
-                            timeout_ms: 2000,
-                            evidence: "icmp".to_string(),
-                        });
+                    let res =
+                        netwatch::monitoring::icmp::ping_with_ssrf(&policy, "127.0.0.1", 2000)
+                            .await
+                            .unwrap_or_else(|e| {
+                                validation_error_result("127.0.0.1", "icmp", 2000, e)
+                            });
 
                     // Record metrics
                     let proto = res.protocol.as_str();
@@ -713,8 +707,23 @@ async fn main() -> Result<()> {
     // Initialize scheduler
     let mut scheduler = Scheduler::new(config.scheduler.concurrency);
 
+    // Initialize SSRF state (needed for monitoring jobs)
+    let ssrf_state =
+        Arc::new(SsrfState::new(config.ssrf.clone()).context("Failed to create SSRF state")?);
+    let ssrf_policy = ssrf_state.policy().clone();
+
+    // Initialize rate limiter
+    let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
+
     // Register health check jobs from config
-    register_monitoring_jobs(&mut scheduler, storage.clone(), event_bus.clone(), &config).await?;
+    register_monitoring_jobs(
+        &mut scheduler,
+        storage.clone(),
+        event_bus.clone(),
+        &config,
+        ssrf_policy,
+    )
+    .await?;
 
     // Register topology discovery job
     if config.discovery.enabled && config.discovery.interval > 0 {
@@ -879,26 +888,61 @@ async fn main() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
 
+    // Initialize auth state
+    let auth_state = Arc::new(AuthState::new(config.auth.clone()));
+
     // Start HTTP server
     let addr: SocketAddr = config.agent.listen.parse()?;
-    let listener = TcpListener::bind(addr).await?;
+
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = api_router(storage).merge(Router::new().route(
+    let app = api_router(
+        storage,
+        auth_state.clone(),
+        ssrf_state.clone(),
+        rate_limiter.clone(),
+    )
+    .merge(Router::new().route(
         "/metrics",
         get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));
 
+    // Load TLS config if enabled
+    let tls_config = config
+        .tls
+        .load_server_config()
+        .context("Failed to load TLS configuration")?;
+
     println!("Running netwatch on {}", addr);
+    if tls_config.is_some() {
+        println!("TLS enabled");
+    }
 
     // Run server with graceful shutdown
-    tokio::select! {
-        result = serve(listener, app.into_make_service()) => {
-            result?;
+    if let Some(tls_config) = tls_config {
+        let tls_acceptor = TlsAcceptor::from(tls_config);
+        let listener = TcpListener::bind(addr).await?;
+        let tls_listener = tokio_rustls::TlsListener::new(listener, tls_acceptor);
+
+        tokio::select! {
+            result = serve(tls_listener, app.into_make_service()) => {
+                result?;
+            }
+            _ = shutdown_signal => {
+                tracing::info!("Shutting down gracefully...");
+            }
         }
-        _ = shutdown_signal => {
-            tracing::info!("Shutting down gracefully...");
+    } else {
+        let listener = TcpListener::bind(addr).await?;
+
+        tokio::select! {
+            result = serve(listener, app.into_make_service()) => {
+                result?;
+            }
+            _ = shutdown_signal => {
+                tracing::info!("Shutting down gracefully...");
+            }
         }
     }
 

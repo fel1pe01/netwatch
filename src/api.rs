@@ -1,3 +1,4 @@
+use crate::auth::{extract_bearer_token, AuthError, AuthState};
 use crate::capacity_planning::{CapacityConfig, CapacityPlanner};
 use crate::discovery::interfaces::discover_interfaces;
 use crate::discovery::routing::discover_routes;
@@ -5,11 +6,17 @@ use crate::incidents::{confirm_root_cause, IncidentStore};
 use crate::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
+use crate::monitoring::validation::{validation_error_result, ValidatedTarget};
 use crate::monitoring::{check_tcp, ping, HealthCheckResult};
+use crate::rate_limit::{rate_limit_middleware, RateLimitState};
 use crate::root_cause::RootCauseAnalyzer;
+use crate::ssrf::SsrfState;
 use crate::storage::Storage;
+use axum::http::StatusCode;
+use axum::middleware::Next;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
@@ -17,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
 use std::sync::Arc;
+use tracing::warn;
 
 pub async fn health_handler() -> Json<Value> {
     Json(json!({"status": "ok"}))
@@ -74,20 +82,14 @@ fn default_timeout_ms() -> u64 {
     2000
 }
 
-pub async fn ping_handler(Json(req): Json<PingRequest>) -> Json<HealthCheckResult> {
-    let res = ping(&req.target, req.timeout_ms)
+pub async fn ping_handler(
+    State(ssrf_state): State<Arc<SsrfState>>,
+    Json(req): Json<PingRequest>,
+) -> Json<HealthCheckResult> {
+    let policy = ssrf_state.policy();
+    let res = crate::monitoring::icmp::ping_with_ssrf(policy, &req.target, req.timeout_ms)
         .await
-        .unwrap_or_else(|e| HealthCheckResult {
-            target: req.target,
-            protocol: "icmp".to_string(),
-            timestamp: chrono::Utc::now(),
-            success: false,
-            latency_ms: None,
-            error: Some(e.to_string()),
-            observed_at: chrono::Utc::now(),
-            timeout_ms: req.timeout_ms,
-            evidence: "icmp".to_string(),
-        });
+        .unwrap_or_else(|e| validation_error_result(&req.target, "icmp", req.timeout_ms, e));
     // Update metrics
     let proto = res.protocol.as_str();
     HEALTH_CHECK_TOTAL.with_label_values(&[proto]).inc();
@@ -113,20 +115,22 @@ pub struct TcpRequest {
     timeout_ms: u64,
 }
 
-pub async fn tcp_handler(Json(req): Json<TcpRequest>) -> Json<HealthCheckResult> {
-    let res = check_tcp(&req.host, req.port, req.timeout_ms)
-        .await
-        .unwrap_or_else(|e| HealthCheckResult {
-            target: format!("{}:{}", req.host, req.port),
-            protocol: "tcp".to_string(),
-            timestamp: chrono::Utc::now(),
-            success: false,
-            latency_ms: None,
-            error: Some(e.to_string()),
-            observed_at: chrono::Utc::now(),
-            timeout_ms: req.timeout_ms,
-            evidence: "tcp_probe".to_string(),
-        });
+pub async fn tcp_handler(
+    State(ssrf_state): State<Arc<SsrfState>>,
+    Json(req): Json<TcpRequest>,
+) -> Json<HealthCheckResult> {
+    let policy = ssrf_state.policy();
+    let res =
+        crate::monitoring::tcp::check_tcp_with_ssrf(policy, &req.host, req.port, req.timeout_ms)
+            .await
+            .unwrap_or_else(|e| {
+                validation_error_result(
+                    &format!("{}:{}", req.host, req.port),
+                    "tcp",
+                    req.timeout_ms,
+                    e,
+                )
+            });
     // Update metrics
     let proto = res.protocol.as_str();
     HEALTH_CHECK_TOTAL.with_label_values(&[proto]).inc();
@@ -298,7 +302,12 @@ pub async fn alertmanager_webhook_handler(
     Json(json!({"status": "ok"}))
 }
 
-pub fn router(storage: Arc<Storage>) -> Router {
+pub fn router(
+    storage: Arc<Storage>,
+    auth_state: Arc<crate::auth::AuthState>,
+    ssrf_state: Arc<SsrfState>,
+    rate_limiter: RateLimitState,
+) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/devices", get(devices_handler))
@@ -322,5 +331,42 @@ pub fn router(storage: Arc<Storage>) -> Router {
         )
         .route("/api/v1/capacity/report", post(capacity_report_handler))
         .route("/api/v1/alerts/webhook", post(alertmanager_webhook_handler))
+        .layer(axum::middleware::from_fn_with_state(
+            rate_limiter.clone(),
+            rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn({
+            let auth_state = auth_state.clone();
+            move |mut request: Request,
+                  next: Next|
+                  -> std::pin::Pin<
+                Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>,
+            > {
+                let auth_state = auth_state.clone();
+                Box::pin(async move {
+                    if !auth_state.is_enabled().await {
+                        return Ok(next.run(request).await);
+                    }
+                    let path = request.uri().path();
+                    if auth_state.is_public_path(path).await {
+                        return Ok(next.run(request).await);
+                    }
+                    let header_name = auth_state.token_header().await;
+                    let token =
+                        extract_bearer_token(request.headers(), &header_name).ok_or_else(|| {
+                            warn!("Missing or invalid Authorization header for path: {}", path);
+                            StatusCode::UNAUTHORIZED
+                        })?;
+                    let user = auth_state.validate_token(&token).await.ok_or_else(|| {
+                        warn!("Invalid token for path: {}", path);
+                        StatusCode::UNAUTHORIZED
+                    })?;
+                    request.extensions_mut().insert(user);
+                    Ok(next.run(request).await)
+                })
+            }
+        }))
         .with_state(storage)
+        .with_state(ssrf_state)
+        .with_state(rate_limiter)
 }

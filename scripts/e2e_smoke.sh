@@ -47,6 +47,75 @@ export HOME="${WORK_DIR}/home"
 export XDG_CONFIG_HOME="${HOME}/.config"
 mkdir -p "${XDG_CONFIG_HOME}"
 
+# Create test config with auth disabled for E2E tests
+cat > "${XDG_CONFIG_HOME}/netwatch.yaml" <<'EOF'
+agent:
+  name: "netwatch"
+  listen: "0.0.0.0:8080"
+storage:
+  path: "/data/netwatch.sqlite"
+metrics:
+  enabled: true
+api:
+  enabled: true
+logging:
+  level: "info"
+discovery:
+  enabled: true
+  interval: 300
+health:
+  interval: 15
+snmp:
+  enabled: false
+  interval: 60
+scheduler:
+  concurrency: 10
+capacity:
+  enabled: true
+  interval: 3600
+anomaly:
+  enabled: true
+  interval: 300
+  min_samples: 10
+  lookback_window_seconds: 3600
+  sensitivity: 1.0
+  min_z_score: 3.0
+  enable_spike_detection: true
+  enable_drift_detection: true
+  enable_pattern_break_detection: false
+  anomaly_cooldown_seconds: 300
+  min_absolute_change: 10.0
+alert:
+  enabled: true
+  interval: 60
+  rules: []
+synthetic_checks:
+  enabled: true
+  interval: 60
+  checks: []
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  parse_mode: "HTML"
+  timeout_seconds: 10
+  max_retries: 3
+  retry_backoff_seconds: 5
+auth:
+  enabled: false
+  tokens: {}
+  public_paths:
+    - "/health"
+    - "/metrics"
+  token_header: "Authorization"
+tls:
+  enabled: false
+ssrf:
+  enabled: true
+rate_limit:
+  enabled: true
+EOF
+
 # Colors for output (solo si la salida es un terminal)
 if [[ -t 1 ]]; then
     RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; NC=$'\033[0m'

@@ -4,6 +4,8 @@ pub mod alerts;
 pub mod anomaly;
 #[path = "api.rs"]
 pub mod api;
+#[path = "auth.rs"]
+pub mod auth;
 #[path = "capacity_planning.rs"]
 pub mod capacity_planning;
 #[path = "config.rs"]
@@ -30,6 +32,8 @@ mod metrics_handler_test;
 pub mod monitoring;
 #[path = "notifications.rs"]
 pub mod notifications;
+#[path = "rate_limit.rs"]
+pub mod rate_limit;
 #[path = "root_cause.rs"]
 pub mod root_cause;
 #[path = "scheduler.rs"]
@@ -38,8 +42,12 @@ pub mod scheduler;
 pub mod service;
 #[path = "snmp.rs"]
 pub mod snmp;
+#[path = "ssrf.rs"]
+pub mod ssrf;
 #[path = "storage.rs"]
 pub mod storage;
+#[path = "tls.rs"]
+pub mod tls;
 #[path = "topology.rs"]
 pub mod topology;
 #[path = "topology_builder.rs"]

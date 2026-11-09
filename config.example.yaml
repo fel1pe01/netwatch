@@ -175,3 +175,39 @@ telegram:
 # alertmanager:
 #   enabled: true
 #   url: "http://alertmanager:9093"
+
+# TLS/HTTPS configuration
+tls:
+  enabled: false
+  cert_file: "/data/certs/server.pem"
+  key_file: "/data/certs/server.key"
+  min_version: "1.2"
+  require_client_auth: false
+  ca_file: "/data/certs/ca.pem"
+
+# SSRF (Server-Side Request Forgery) protection
+ssrf:
+  enabled: true
+  allow_private_ips: false
+  allow_loopback: false
+  allow_link_local: false
+  allow_multicast: false
+  allow_broadcast: false
+  allowed_cidrs: []
+  allowed_hostnames: []
+  blocked_cidrs: []
+  max_redirects: 10
+  dns_timeout_ms: 5000
+  validate_dns_rebinding: true
+  allowed_ports: []
+  blocked_ports: []
+
+# Rate limiting configuration
+rate_limit:
+  enabled: true
+  max_requests: 100
+  window_seconds: 60
+  key_type: "ip"
+  excluded_paths:
+    - "/health"
+    - "/metrics"

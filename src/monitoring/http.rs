@@ -1,5 +1,9 @@
+use crate::monitoring::validation::{
+    validate_http_url, validate_redirect_url, validation_error_result, ValidatedTarget,
+};
 use crate::monitoring::HealthCheckResult;
-use anyhow::Result;
+use crate::ssrf::SsrfPolicy;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use reqwest::Client;
 use std::time::{Duration, Instant};
@@ -190,6 +194,218 @@ pub async fn check_http_with_phases(
         );
     } else {
         // HTTP: DNS -> TCP -> TTFB
+        phase_timings.dns_ms = Some((phase_timings.total_ms as f64 * 0.15) as u128);
+        phase_timings.tcp_ms = Some((phase_timings.total_ms as f64 * 0.25) as u128);
+        phase_timings.ttfb_ms = Some(
+            phase_timings.total_ms - phase_timings.dns_ms.unwrap() - phase_timings.tcp_ms.unwrap(),
+        );
+    }
+
+    let latency_ms = if success {
+        Some(phase_timings.total_ms)
+    } else {
+        None
+    };
+
+    let result = HealthCheckResult {
+        target: url.to_string(),
+        protocol: if is_https { "https" } else { "http" }.to_string(),
+        timestamp: now,
+        success,
+        latency_ms,
+        error,
+        observed_at: now,
+        timeout_ms,
+        evidence: "http_probe".to_string(),
+    };
+
+    Ok((result, phase_timings))
+}
+
+/// HTTP/HTTPS health check with SSRF validation
+pub async fn check_http_with_ssrf(
+    policy: &SsrfPolicy,
+    url: &str,
+    timeout_ms: u64,
+    expected_status: Option<u16>,
+    expected_body: Option<String>,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<HealthCheckResult> {
+    // Validate URL against SSRF policy
+    let _validated = validate_http_url(policy, url)?;
+
+    // Use the existing check_http_with_phases for the actual check
+    // but with a custom redirect policy that validates redirects
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    let now = Utc::now();
+    let total_start = Instant::now();
+
+    let client = Client::builder()
+        .timeout(timeout_duration)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            // Validate each redirect
+            if let Ok(url) = attempt.url() {
+                if let Err(e) = validate_redirect_url(policy, url.as_str()) {
+                    tracing::warn!("Redirect blocked by SSRF policy: {}", e);
+                    return attempt.error(e.into());
+                }
+            }
+            attempt.follow()
+        }))
+        .build()?;
+
+    let mut request = client.get(url);
+
+    if let Some(h) = headers {
+        for (key, value) in h {
+            request = request.header(key, value);
+        }
+    }
+
+    let result = timeout(timeout_duration, request.send()).await;
+    let total_latency_ms = total_start.elapsed().as_millis();
+
+    let (success, error, _status_code, _body) = match result {
+        Ok(Ok(response)) => {
+            let status = response.status().as_u16();
+            let body_text = response.text().await.ok();
+
+            let status_ok = expected_status.is_none_or(|expected| status == expected);
+            let body_ok = expected_body
+                .as_ref()
+                .is_none_or(|expected| body_text.as_ref().is_some_and(|b| b.contains(expected)));
+
+            let overall_success = status_ok && body_ok;
+
+            let error_msg = if !status_ok {
+                Some(format!(
+                    "unexpected status: got {}, expected {:?}",
+                    status, expected_status
+                ))
+            } else if !body_ok {
+                Some("expected body content not found".to_string())
+            } else {
+                None
+            };
+
+            (overall_success, error_msg, Some(status), body_text)
+        }
+        Ok(Err(e)) => (false, Some(e.to_string()), None, None),
+        Err(_) => (false, Some("timeout".to_string()), None, None),
+    };
+
+    let latency_ms = if success {
+        Some(total_latency_ms)
+    } else {
+        None
+    };
+
+    Ok(HealthCheckResult {
+        target: url.to_string(),
+        protocol: if url.starts_with("https") {
+            "https"
+        } else {
+            "http"
+        }
+        .to_string(),
+        timestamp: now,
+        success,
+        latency_ms,
+        error,
+        observed_at: now,
+        timeout_ms,
+        evidence: "http_probe".to_string(),
+    })
+}
+
+/// HTTP/HTTPS health check with SSRF validation and phase timings
+pub async fn check_http_with_phases_ssrf(
+    policy: &SsrfPolicy,
+    url: &str,
+    timeout_ms: u64,
+    expected_status: Option<u16>,
+    expected_body: Option<String>,
+    headers: Option<Vec<(String, String)>>,
+) -> Result<(HealthCheckResult, HttpPhaseTimings)> {
+    // Validate URL against SSRF policy
+    let _validated = validate_http_url(policy, url)?;
+
+    let timeout_duration = Duration::from_millis(timeout_ms);
+    let now = Utc::now();
+    let total_start = Instant::now();
+
+    let mut phase_timings = HttpPhaseTimings::default();
+    let mut success = false;
+    let mut error: Option<String> = None;
+    let status_code: Option<u16>;
+    let body_text: Option<String>;
+
+    let client = Client::builder()
+        .timeout(timeout_duration)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if let Ok(url) = attempt.url() {
+                if let Err(e) = validate_redirect_url(policy, url.as_str()) {
+                    tracing::warn!("Redirect blocked by SSRF policy: {}", e);
+                    return attempt.error(e.into());
+                }
+            }
+            attempt.follow()
+        }))
+        .build()?;
+
+    let mut request = client.get(url);
+    if let Some(h) = headers {
+        for (key, value) in h {
+            request = request.header(key, value);
+        }
+    }
+
+    let result = timeout(timeout_duration, request.send()).await;
+    phase_timings.total_ms = total_start.elapsed().as_millis();
+
+    match result {
+        Ok(Ok(response)) => {
+            status_code = Some(response.status().as_u16());
+            body_text = response.text().await.ok();
+
+            let status_ok = expected_status.is_none_or(|expected| status_code == Some(expected));
+            let body_ok = expected_body
+                .as_ref()
+                .is_none_or(|expected| body_text.as_ref().is_some_and(|b| b.contains(expected)));
+
+            success = status_ok && body_ok;
+
+            if !status_ok {
+                error = Some(format!(
+                    "unexpected status: got {}, expected {:?}",
+                    status_code.unwrap(),
+                    expected_status
+                ));
+            } else if !body_ok {
+                error = Some("expected body content not found".to_string());
+            }
+        }
+        Ok(Err(e)) => {
+            error = Some(e.to_string());
+        }
+        Err(_) => {
+            error = Some("timeout".to_string());
+        }
+    }
+
+    // Estimate phase timings based on total time and protocol
+    let is_https = url.starts_with("https");
+    if is_https {
+        phase_timings.dns_ms = Some((phase_timings.total_ms as f64 * 0.10) as u128);
+        phase_timings.tcp_ms = Some((phase_timings.total_ms as f64 * 0.15) as u128);
+        phase_timings.tls_ms = Some((phase_timings.total_ms as f64 * 0.35) as u128);
+        phase_timings.ttfb_ms = Some(
+            phase_timings.total_ms
+                - phase_timings.dns_ms.unwrap()
+                - phase_timings.tcp_ms.unwrap()
+                - phase_timings.tls_ms.unwrap(),
+        );
+    } else {
         phase_timings.dns_ms = Some((phase_timings.total_ms as f64 * 0.15) as u128);
         phase_timings.tcp_ms = Some((phase_timings.total_ms as f64 * 0.25) as u128);
         phase_timings.ttfb_ms = Some(

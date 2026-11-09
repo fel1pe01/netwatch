@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use yaml_serde;
 
+use crate::auth::AuthConfig;
+use crate::rate_limit::RateLimitConfig;
+use crate::ssrf::SsrfConfig;
+use crate::tls::TlsConfig;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentConfig {
     pub name: String,
@@ -235,6 +240,10 @@ pub struct Config {
     pub alert: AlertConfig,
     pub synthetic_checks: SyntheticChecksConfig,
     pub telegram: TelegramConfig,
+    pub auth: AuthConfig,
+    pub tls: TlsConfig,
+    pub ssrf: SsrfConfig,
+    pub rate_limit: RateLimitConfig,
 }
 
 impl Default for Config {
@@ -286,6 +295,10 @@ impl Default for Config {
                 max_retries: 3,
                 retry_backoff_seconds: 5,
             },
+            auth: AuthConfig::default(),
+            tls: TlsConfig::default(),
+            ssrf: SsrfConfig::default(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 }
@@ -294,7 +307,11 @@ impl Config {
     pub fn from_path(path: &PathBuf) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Could not read config at {}", path.display()))?;
-        let mut cfg: Config = yaml_serde::from_str(&content)
+
+        // Expand environment variables in the format ${VAR} or ${VAR:-default}
+        let expanded_content = expand_env_vars(&content)?;
+
+        let mut cfg: Config = yaml_serde::from_str(&expanded_content)
             .with_context(|| format!("Failed to parse YAML at {}", path.display()))?;
 
         // Override with environment variables if present
@@ -310,4 +327,59 @@ impl Config {
 
         Ok(cfg)
     }
+}
+
+/// Expand environment variables in the format ${VAR} or ${VAR:-default}
+fn expand_env_vars(content: &str) -> Result<String> {
+    let mut result = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' && chars.peek() == Some(&'{') {
+            // Found ${...}
+            chars.next(); // consume '{'
+            let mut var_name = String::new();
+            let mut default_value = None;
+
+            while let Some(&c) = chars.peek() {
+                if c == '}' {
+                    chars.next(); // consume '}'
+                    break;
+                } else if c == ':' && chars.nth(1) == Some(&'-') {
+                    // Found :- for default value
+                    chars.next(); // consume ':'
+                    chars.next(); // consume '-'
+                    let mut default = String::new();
+                    while let Some(&c) = chars.peek() {
+                        if c == '}' {
+                            chars.next(); // consume '}'
+                            break;
+                        }
+                        default.push(c);
+                        chars.next();
+                    }
+                    default_value = Some(default);
+                } else {
+                    var_name.push(c);
+                    chars.next();
+                }
+            }
+
+            // Look up the environment variable
+            match std::env::var(&var_name) {
+                Ok(value) => result.push_str(&value),
+                Err(_) => {
+                    if let Some(default) = default_value {
+                        result.push_str(&default);
+                    } else {
+                        anyhow::bail!("Required environment variable '{}' not set", var_name);
+                    }
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    Ok(result)
 }

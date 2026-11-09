@@ -1,4 +1,5 @@
 use netwatch::api::router;
+use netwatch::auth::AuthState;
 use netwatch::metrics::AppMetrics;
 use netwatch::storage::Storage;
 use reqwest::Client;
@@ -17,10 +18,17 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let storage = Storage::connect(db_path.to_str().unwrap()).await.unwrap();
     let storage = Arc::new(storage);
 
+    let auth_state = Arc::new(AuthState::new(netwatch::auth::AuthConfig {
+        enabled: false,
+        tokens: std::collections::HashMap::new(),
+        public_paths: vec!["/health".to_string(), "/metrics".to_string()],
+        token_header: "Authorization".to_string(),
+    }));
+
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = router(storage).merge(axum::Router::new().route(
+    let app = router(storage, auth_state).merge(axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));
