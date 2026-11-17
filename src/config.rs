@@ -251,7 +251,7 @@ impl Default for Config {
         Config {
             agent: AgentConfig {
                 name: "netwatch".to_string(),
-                listen: "0.0.0.0:8080".to_string(),
+                listen: "127.0.0.1:8080".to_string(),
             },
             storage: StorageConfig {
                 path: "netwatch.sqlite".to_string(),

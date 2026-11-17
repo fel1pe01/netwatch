@@ -1,5 +1,6 @@
 use netwatch::api::{router, AppState};
 use netwatch::auth::AuthState;
+use netwatch::config::Config;
 use netwatch::metrics::AppMetrics;
 use netwatch::rate_limit::{RateLimitConfig, RateLimiter};
 use netwatch::ssrf::{SsrfConfig, SsrfState};
@@ -218,4 +219,10 @@ async fn default_config_ssrf_allows_public_ips() {
             .unwrap_or("")
             .contains("SSRF validation failed"));
     }
+}
+
+#[tokio::test]
+async fn default_config_listen_address_is_loopback() {
+    let config = Config::default();
+    assert_eq!(config.agent.listen, "127.0.0.1:8080");
 }
