@@ -1,7 +1,7 @@
-use crate::monitoring::validation::{validation_error_result, ValidatedTarget};
+use crate::monitoring::validation::ValidatedTarget;
 use crate::monitoring::HealthCheckResult;
 use crate::ssrf::SsrfPolicy;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use std::net::SocketAddr;
 use std::time::Duration;

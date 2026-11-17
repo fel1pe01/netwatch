@@ -330,7 +330,7 @@ impl Config {
 }
 
 /// Expand environment variables in the format ${VAR} or ${VAR:-default}
-fn expand_env_vars(content: &str) -> Result<String> {
+pub(crate) fn expand_env_vars(content: &str) -> Result<String> {
     let mut result = String::with_capacity(content.len());
     let mut chars = content.chars().peekable();
 
@@ -345,20 +345,28 @@ fn expand_env_vars(content: &str) -> Result<String> {
                 if c == '}' {
                     chars.next(); // consume '}'
                     break;
-                } else if c == ':' && chars.nth(1) == Some(&'-') {
-                    // Found :- for default value
-                    chars.next(); // consume ':'
-                    chars.next(); // consume '-'
-                    let mut default = String::new();
-                    while let Some(&c) = chars.peek() {
-                        if c == '}' {
-                            chars.next(); // consume '}'
-                            break;
+                } else if c == ':' {
+                    // Check for :- for default value
+                    let mut peeked = chars.clone();
+                    peeked.next(); // skip ':'
+                    if peeked.next() == Some('-') {
+                        // Found :- for default value
+                        chars.next(); // consume ':'
+                        chars.next(); // consume '-'
+                        let mut default = String::new();
+                        while let Some(&c) = chars.peek() {
+                            if c == '}' {
+                                chars.next(); // consume '}'
+                                break;
+                            }
+                            default.push(c);
+                            chars.next();
                         }
-                        default.push(c);
+                        default_value = Some(default);
+                    } else {
+                        var_name.push(c);
                         chars.next();
                     }
-                    default_value = Some(default);
                 } else {
                     var_name.push(c);
                     chars.next();

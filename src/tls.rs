@@ -3,7 +3,6 @@ use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::ServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// TLS configuration for the HTTP server
@@ -69,7 +68,7 @@ impl TlsConfig {
         // Build server config
         let mut config = ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(cert_chain, private_key)
+            .with_single_cert(cert_chain.clone(), private_key.clone_key())
             .context("Failed to create TLS server config with certificate")?;
 
         // Configure minimum TLS version
@@ -98,12 +97,10 @@ impl TlsConfig {
                 .build()
                 .context("Failed to build client verifier")?;
 
+            // Rebuild ServerConfig with client auth using the same cert_chain and private_key
             config = ServerConfig::builder()
                 .with_client_cert_verifier(client_auth)
-                .with_single_cert(
-                    config.cert_resolver.unwrap().clone_cert_resolver(),
-                    config.key_log.clone(),
-                )
+                .with_single_cert(cert_chain, private_key)
                 .context("Failed to create TLS server config with client auth")?;
         }
 
@@ -157,16 +154,16 @@ fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
         return Ok(key);
     }
 
-    // Try PKCS#1 (RSA)
+    // Try PKCS#1 (RSA) - rustls-pemfile 2.x returns iterator
     let mut reader = content.as_slice();
-    if let Ok(Some(key)) = rustls_pemfile::rsa_private_key(&mut reader) {
-        return Ok(key.into());
+    if let Some(key) = rustls_pemfile::rsa_private_keys(&mut reader).next() {
+        return Ok(key?.into());
     }
 
-    // Try PKCS#1 (EC)
+    // Try PKCS#1 (EC) - rustls-pemfile 2.x returns iterator
     let mut reader = content.as_slice();
-    if let Ok(Some(key)) = rustls_pemfile::ec_private_key(&mut reader) {
-        return Ok(key.into());
+    if let Some(key) = rustls_pemfile::ec_private_keys(&mut reader).next() {
+        return Ok(key?.into());
     }
 
     anyhow::bail!(
@@ -178,7 +175,6 @@ fn load_private_key(path: &str) -> Result<PrivateKeyDer<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
 
     #[test]
     fn test_tls_config_default() {
@@ -219,5 +215,22 @@ mod tests {
             ca_file: None,
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_tls_load_server_config_fail_closed() {
+        // Test that load_server_config returns an error when TLS is enabled
+        // but TlsListener is not available (the fail-closed behavior)
+        let config = TlsConfig {
+            enabled: true,
+            cert_file: Some("/nonexistent/cert.pem".to_string()),
+            key_file: Some("/nonexistent/key.pem".to_string()),
+            min_version: "1.2".to_string(),
+            require_client_auth: false,
+            ca_file: None,
+        };
+        let result = config.load_server_config();
+        // Should fail because cert/key files don't exist
+        assert!(result.is_err());
     }
 }

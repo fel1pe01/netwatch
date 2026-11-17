@@ -28,7 +28,7 @@ impl ValidatedTarget {
         }
 
         // Resolve with timeout
-        let dns_timeout = Duration::from_millis(policy.config.dns_timeout_ms);
+        let dns_timeout = Duration::from_millis(policy.config().dns_timeout_ms);
         let lookup_future = lookup_host(format!("{}:{}", hostname, port));
         let addrs = tokio::time::timeout(dns_timeout, lookup_future)
             .await
@@ -215,7 +215,7 @@ mod tests {
     fn test_validate_http_url() {
         let config = SsrfConfig {
             allowed_hostnames: vec!["example.com".to_string()],
-            allowed_ports: vec![80, 443],
+            allowed_ports: vec![80, 443, 8443],
             ..Default::default()
         };
         let policy = SsrfPolicy::new(config).unwrap();

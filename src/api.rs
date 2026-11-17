@@ -1,4 +1,4 @@
-use crate::auth::{extract_bearer_token, AuthError, AuthState};
+use crate::auth::{extract_bearer_token, AuthState};
 use crate::capacity_planning::{CapacityConfig, CapacityPlanner};
 use crate::discovery::interfaces::discover_interfaces;
 use crate::discovery::routing::discover_routes;
@@ -6,8 +6,8 @@ use crate::incidents::{confirm_root_cause, IncidentStore};
 use crate::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
-use crate::monitoring::validation::{validation_error_result, ValidatedTarget};
-use crate::monitoring::{check_tcp, ping, HealthCheckResult};
+use crate::monitoring::validation::validation_error_result;
+use crate::monitoring::HealthCheckResult;
 use crate::rate_limit::{rate_limit_middleware, RateLimitState};
 use crate::root_cause::RootCauseAnalyzer;
 use crate::ssrf::SsrfState;
@@ -26,11 +26,36 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::warn;
 
+/// Combined application state for all handlers
+#[derive(Clone)]
+pub struct AppState {
+    pub storage: Arc<Storage>,
+    pub ssrf_state: Arc<SsrfState>,
+    pub auth_state: Arc<AuthState>,
+    pub rate_limiter: RateLimitState,
+}
+
+impl AppState {
+    pub fn new(
+        storage: Arc<Storage>,
+        ssrf_state: Arc<SsrfState>,
+        auth_state: Arc<AuthState>,
+        rate_limiter: RateLimitState,
+    ) -> Self {
+        Self {
+            storage,
+            ssrf_state,
+            auth_state,
+            rate_limiter,
+        }
+    }
+}
+
 pub async fn health_handler() -> Json<Value> {
     Json(json!({"status": "ok"}))
 }
 
-pub async fn devices_handler(State(storage): State<Arc<Storage>>) -> Json<Value> {
+pub async fn devices_handler(State(state): State<AppState>) -> Json<Value> {
     use serde::{Deserialize, Serialize};
     use sqlx::FromRow;
 
@@ -50,7 +75,7 @@ pub async fn devices_handler(State(storage): State<Arc<Storage>>) -> Json<Value>
 
     let devices =
         sqlx::query_as::<_, DeviceRow>("SELECT * FROM devices ORDER BY created_at DESC LIMIT 100")
-            .fetch_all(&storage.pool)
+            .fetch_all(&state.storage.pool)
             .await
             .unwrap_or_default();
 
@@ -83,10 +108,10 @@ fn default_timeout_ms() -> u64 {
 }
 
 pub async fn ping_handler(
-    State(ssrf_state): State<Arc<SsrfState>>,
+    State(state): State<AppState>,
     Json(req): Json<PingRequest>,
 ) -> Json<HealthCheckResult> {
-    let policy = ssrf_state.policy();
+    let policy = state.ssrf_state.policy();
     let res = crate::monitoring::icmp::ping_with_ssrf(policy, &req.target, req.timeout_ms)
         .await
         .unwrap_or_else(|e| validation_error_result(&req.target, "icmp", req.timeout_ms, e));
@@ -116,10 +141,10 @@ pub struct TcpRequest {
 }
 
 pub async fn tcp_handler(
-    State(ssrf_state): State<Arc<SsrfState>>,
+    State(state): State<AppState>,
     Json(req): Json<TcpRequest>,
 ) -> Json<HealthCheckResult> {
-    let policy = ssrf_state.policy();
+    let policy = state.ssrf_state.policy();
     let res =
         crate::monitoring::tcp::check_tcp_with_ssrf(policy, &req.host, req.port, req.timeout_ms)
             .await
@@ -155,11 +180,11 @@ pub struct ConfirmHypothesisRequest {
     actor: String,
 }
 
-pub async fn hypotheses_handler(State(storage): State<Arc<Storage>>) -> Json<Value> {
-    let incident_store = IncidentStore::new(storage.pool.clone());
+pub async fn hypotheses_handler(State(state): State<AppState>) -> Json<Value> {
+    let incident_store = IncidentStore::new(state.storage.pool.clone());
     let _incidents = incident_store.list_open().await.unwrap_or_default();
-    let topology_store = crate::topology_store::TopologyStore::new(storage.pool.clone());
-    let analyzer = RootCauseAnalyzer::new(Arc::new(topology_store), storage.clone());
+    let topology_store = crate::topology_store::TopologyStore::new(state.storage.pool.clone());
+    let analyzer = RootCauseAnalyzer::new(Arc::new(topology_store), state.storage.clone());
     let hypotheses = analyzer
         .analyze(chrono::Utc::now() - chrono::Duration::hours(24), None)
         .await
@@ -168,11 +193,11 @@ pub async fn hypotheses_handler(State(storage): State<Arc<Storage>>) -> Json<Val
 }
 
 pub async fn hypothesis_detail_handler(
-    State(storage): State<Arc<Storage>>,
+    State(state): State<AppState>,
     Path(hypothesis_id): Path<String>,
 ) -> Json<Value> {
     use crate::incidents::IncidentStore;
-    let incident_store = IncidentStore::new(storage.pool.clone());
+    let incident_store = IncidentStore::new(state.storage.pool.clone());
     match incident_store.find_by_hypothesis_id(&hypothesis_id).await {
         Ok(Some(incident)) => {
             let hypothesis = crate::root_cause::Hypothesis {
@@ -199,12 +224,12 @@ pub async fn hypothesis_detail_handler(
 }
 
 pub async fn confirm_hypothesis_handler(
-    State(storage): State<Arc<Storage>>,
+    State(state): State<AppState>,
     Path(incident_id): Path<String>,
     Json(req): Json<ConfirmHypothesisRequest>,
 ) -> Json<Value> {
     use crate::incidents::IncidentStore;
-    let incident_store = IncidentStore::new(storage.pool.clone());
+    let incident_store = IncidentStore::new(state.storage.pool.clone());
     match confirm_root_cause(
         &incident_store,
         &incident_id,
@@ -231,11 +256,11 @@ fn default_markdown() -> String {
 
 /// Capacity planning report handler
 pub async fn capacity_report_handler(
-    State(storage): State<Arc<Storage>>,
+    State(state): State<AppState>,
     Json(req): Json<CapacityReportRequest>,
 ) -> Json<Value> {
     let config = CapacityConfig::default();
-    let mut planner = CapacityPlanner::new(storage.clone(), config);
+    let mut planner = CapacityPlanner::new(state.storage.clone(), config);
     match planner.analyze_capacity().await {
         Ok(report) => match req.format.as_str() {
             "json" => match report.to_json() {
@@ -279,7 +304,7 @@ pub struct AlertmanagerAlert {
 
 /// Alertmanager webhook handler
 pub async fn alertmanager_webhook_handler(
-    State(_storage): State<Arc<Storage>>,
+    State(_state): State<AppState>,
     Json(payload): Json<AlertmanagerPayload>,
 ) -> Json<Value> {
     tracing::info!(
@@ -302,12 +327,7 @@ pub async fn alertmanager_webhook_handler(
     Json(json!({"status": "ok"}))
 }
 
-pub fn router(
-    storage: Arc<Storage>,
-    auth_state: Arc<crate::auth::AuthState>,
-    ssrf_state: Arc<SsrfState>,
-    rate_limiter: RateLimitState,
-) -> Router {
+pub fn router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/devices", get(devices_handler))
@@ -332,41 +352,37 @@ pub fn router(
         .route("/api/v1/capacity/report", post(capacity_report_handler))
         .route("/api/v1/alerts/webhook", post(alertmanager_webhook_handler))
         .layer(axum::middleware::from_fn_with_state(
-            rate_limiter.clone(),
+            app_state.rate_limiter.clone(),
             rate_limit_middleware,
         ))
-        .layer(axum::middleware::from_fn({
-            let auth_state = auth_state.clone();
-            move |mut request: Request,
-                  next: Next|
-                  -> std::pin::Pin<
-                Box<dyn std::future::Future<Output = Result<Response, StatusCode>> + Send>,
-            > {
-                let auth_state = auth_state.clone();
-                Box::pin(async move {
-                    if !auth_state.is_enabled().await {
-                        return Ok(next.run(request).await);
-                    }
-                    let path = request.uri().path();
-                    if auth_state.is_public_path(path).await {
-                        return Ok(next.run(request).await);
-                    }
-                    let header_name = auth_state.token_header().await;
-                    let token =
-                        extract_bearer_token(request.headers(), &header_name).ok_or_else(|| {
-                            warn!("Missing or invalid Authorization header for path: {}", path);
-                            StatusCode::UNAUTHORIZED
-                        })?;
-                    let user = auth_state.validate_token(&token).await.ok_or_else(|| {
-                        warn!("Invalid token for path: {}", path);
-                        StatusCode::UNAUTHORIZED
-                    })?;
-                    request.extensions_mut().insert(user);
-                    Ok(next.run(request).await)
-                })
-            }
-        }))
-        .with_state(storage)
-        .with_state(ssrf_state)
-        .with_state(rate_limiter)
+        .layer(axum::middleware::from_fn_with_state(
+            app_state.auth_state.clone(),
+            auth_middleware,
+        ))
+        .with_state(app_state)
+}
+
+async fn auth_middleware(
+    State(auth_state): State<Arc<AuthState>>,
+    mut request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    if !auth_state.is_enabled().await {
+        return Ok(next.run(request).await);
+    }
+    let path = request.uri().path();
+    if auth_state.is_public_path(path).await {
+        return Ok(next.run(request).await);
+    }
+    let header_name = auth_state.token_header().await;
+    let token = extract_bearer_token(request.headers(), &header_name).ok_or_else(|| {
+        warn!("Missing or invalid Authorization header for path: {}", path);
+        StatusCode::UNAUTHORIZED
+    })?;
+    let user = auth_state.validate_token(&token).await.ok_or_else(|| {
+        warn!("Invalid token for path: {}", path);
+        StatusCode::UNAUTHORIZED
+    })?;
+    request.extensions_mut().insert(user);
+    Ok(next.run(request).await)
 }

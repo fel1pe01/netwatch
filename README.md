@@ -47,13 +47,13 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| CLI (`monitor ping/tcp`, `discover local`) | ✅ Implemented | JSON output, tested |
+| CLI (`monitor ping/tcp`, `discover local`, `capacity report`) | ✅ Implemented | JSON output, tested |
 | HTTP API (core endpoints) | ✅ Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
-| HTTP API (inventory/topology) | ⚠️ Partial | `/devices` queries DB; 5 endpoints remain placeholders |
+| HTTP API (inventory/topology) | ⚠️ Partial | `/devices` queries DB; 5 endpoints remain placeholders (`/vlans`, `/subnets`, `/gateways`, `/events`, `/topology`) |
 | Prometheus metrics | ✅ Implemented | AppMetrics + health checks + scheduler metrics; `protocol` label only (bounded cardinality) |
-| Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work |
-| SQLite storage & migrations | ✅ Implemented | 13 tables with indexes; `Storage::connect()` wired in server |
-| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, synthetic checks, topology, SNMP, anomaly detection, capacity planning, alert evaluation; graceful shutdown |
+| Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work; `${VAR:-default}` expansion |
+| SQLite storage & migrations | ✅ Implemented | 14 tables with indexes; `Storage::connect()` wired in server; auto-migrations |
+| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, synthetic checks, topology, SNMP (placeholder), anomaly detection, capacity planning, alert evaluation, service checks; graceful shutdown |
 | Event bus | ✅ Implemented | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; alert events emitted |
 | ICMP monitoring | ✅ Implemented | Uses system `ping`; Linux-only; no raw socket fallback |
 | TCP monitoring | ✅ Implemented | Tokio `TcpStream` with timeout |
@@ -64,7 +64,7 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Topology builder | ✅ Implemented | Graph from discovery + SNMP; Mermaid/DOT/JSON export |
 | Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export |
 | Synthetic checks (HTTP/HTTPS/DNS/TCP/TLS) | ✅ Implemented | Integrated with scheduler via config `synthetic_checks`; configurable targets, headers, expected status/body, TLS cert validation |
-| Alert engine | ✅ Implemented | `AlertEngine` with 5 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events |
+| Alert engine | ✅ Implemented | `AlertEngine` with 6 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events |
 | Notification manager | ✅ Implemented | `NotificationManager` with `TelegramNotifier` (rate limiting, retry with exponential backoff, HTML formatting) |
 | Alertmanager webhook | ✅ Implemented | `/api/v1/alerts/webhook` endpoint receives Alertmanager payloads |
 | Incident correlation | ✅ Implemented | Gateway failure suppresses downstream device/service incidents via topology `DependsOn`/`GatewayOf` edges |
@@ -72,10 +72,10 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Capacity API | ✅ Implemented | `/api/v1/capacity/report` endpoint (CLI + API); markdown/JSON reports |
 | Synthetic check per-phase metrics | ✅ Implemented | `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` histograms with `target` label |
 | Scheduler metrics | ✅ Implemented | `netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total` exposed via Prometheus |
-| Test suite | ✅ 93 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause — **re-verified 2026-10-19** |
-| E2E smoke test | ✅ 42/42 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-10-19** |
+| Test suite | ✅ 143 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause, default config — **re-verified 2026-11-17** |
+| E2E smoke test | ✅ 40/40 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-11-17** |
 
-**Key limitations:** No authentication/TLS on API, Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, no detector registry, no false positive tracking, no confidence intervals for capacity projections. **Docker/Compose stack validation pending — Docker not available in CI environment.**
+**Key limitations:** TLS NOT implemented (server refuses to start if TLS configured — fail-closed), no authentication on API (binds 0.0.0.0:8080 by default — risk for Phase 2), Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, scheduler/event persistence not fully wired to REST, no detector registry, no false positive tracking, no confidence intervals for capacity projections. **Docker/Compose stack validation pending — Docker not available in CI environment.**
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for detailed per-objective status with code references.
 

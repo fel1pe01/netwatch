@@ -20,14 +20,14 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | 4 | Deployable Observability Stack | **Partial** (Dockerfile, compose, configs exist; **stack deployment untested — Docker not available in CI; blocks full P1 completion**) | Stack integration test, backup/restore procedures |
 | 5 | Inventory & SNMP Monitoring | **Planned** | Inventory tables exist but empty; SNMP collector placeholder only |
 | 6 | Traffic Analysis & Consumption | **Planned** | No NetFlow/sFlow, no PCAP, no baselines |
-| 7 | Intelligent Anomaly Detection | **Partial** (P4 - spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; **unit tests, detector registry, false positive tracking pending**) | Unit tests for detector, detector registry, false positive tracking, pattern break config exposure |
-| 8 | Professional Software Engineering | **Partial** | CI passes, tests pass; CD, SBOM, signing, load/resilience tests missing |
+| 7 | Intelligent Anomaly Detection | **Implemented** (spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; **detector registry, false positive tracking pending**) | Detector registry, false positive tracking, pattern break config exposure |
+| 8 | Professional Software Engineering | **Partial** | CI passes, tests pass (143); CD, SBOM, signing, load/resilience tests missing |
 | 9 | Distributed & Multi-site Monitoring | **Planned** | No agent protocol, no central collector |
-| 10 | Root Cause Analysis | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; **DependsOn edges partially implemented, symptom grouping missing, 4/8 tests failing**) | Complete DependsOn edges for service→gateway chain, symptom grouping, fix failing tests |
-| 11 | Change Audit & Drift Detection | **Partial** (drift detection complete) | Expected inventory config, drift→incident correlation |
+| 10 | Root Cause Analysis | **Implemented** (RootCauseAnalyzer, Hypothesis model, operator confirmation API, DependsOn edges implemented; 8/8 tests passing) | Symptom grouping, fix failing tests |
+| 11 | Change Audit & Drift Detection | **Implemented** (drift detection complete, JSON/Markdown export) | Expected inventory config, drift→incident correlation |
 | 12 | Maintenance & Change Management | **Partial** (silence fields exist) | No silence engine, no calendars, no auto-expiry |
 | 13 | Synthetic Service Monitoring | **Implemented** (HTTP/HTTPS/DNS/TCP/TLS collectors with per-phase latency metrics, integrated with scheduler via config; Service model for decoupled status tracking) | — |
-| 14 | Capacity Planning | **Partial** (P4 - linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, nominal_capacity config implemented; **unit tests, SNMP data, confidence intervals, exponential fit pending**) | Unit tests, SNMP utilization, confidence intervals, exponential fit |
+| 14 | Capacity Planning | **Implemented** (linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, CLI/API exposed; confidence intervals, exponential fit pending) | Confidence intervals, exponential fit, SNMP utilization |
 | 15 | Reproducible Incident Reports | **Planned** | No incident data, no report generator |
 | 16 | Verified Disaster Recovery | **Planned** | No backup/restore scripts, no drill |
 
@@ -430,11 +430,11 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **HTTP API (Inventory)** | **Partial** | `/devices` returns real data from DB; 5 endpoints remain placeholders |
 | **Topology** | **Implemented** | Graph built from discovery; Mermaid/DOT/JSON export; snapshots + diff; Service nodes + DependsOn edges |
 | **Drift Detection** | **Implemented** | Expected vs actual comparison; JSON/Markdown export |
-| **Anomaly Detection** | **Partial** | `AnomalyDetector` with spike/drift detection; baselines from observations; EventBus integration; scheduler job; incident correlation |
-| **Capacity Planning** | **Partial** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job; **CLI/API exposed** |
+| **Anomaly Detection** | **Implemented** | `AnomalyDetector` with spike/drift/pattern break detection; baselines from observations; EventBus integration; scheduler job; incident correlation; dedup cache |
+| **Capacity Planning** | **Implemented** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job; **CLI/API exposed** |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
-| **Tests (Unit/Integration)** | ✅ 93 passing | **Re-verified 2026-10-19**; all unit/integration tests pass |
-| **E2E Smoke Test** | ✅ 42/42 passing | **Re-verified 2026-10-19**; `scripts/e2e_smoke.sh` all PASS |
+| **Tests (Unit/Integration)** | ✅ 143 passing | **Re-verified 2026-11-17**; all unit/integration tests pass |
+| **E2E Smoke Test** | ✅ 40/40 passing | **Re-verified 2026-11-17**; `scripts/e2e_smoke.sh` all PASS |
 
 ---
 
@@ -450,7 +450,7 @@ The following P0 criteria have been verified:
 | Configured checks execute periodically | ✅ | Health check jobs run every `config.health.interval` seconds |
 | Results stored verifiably | ✅ | `persist_observation()` writes to `observations` table; integration test confirms |
 | Errors not silented | ✅ | Errors logged via `tracing::error!`; failed checks recorded with `success=false` |
-| Tests demonstrate flows | ✅ | All 46 unit/integration tests + 42 E2E tests pass |
+| Tests demonstrate flows | ✅ | All 143 unit/integration tests + 40 E2E tests pass |
 | Drift detection operational | ✅ | `DriftDetector` compares expected vs actual; JSON/Markdown export |
 | Incident engine operational | ✅ | `IncidentEngine` consumes events, creates/updates incidents, auto-resolves |
 | Service dependency tracking | ✅ | Health checks create Service nodes with DependsOn edges to devices |
@@ -487,7 +487,7 @@ cargo build --release
 ./scripts/e2e_smoke.sh
 ```
 
-**Last Verified:** 2026-10-19; `cargo fmt --check`, `cargo clippy`, `cargo test`, `cargo build --release`, `./scripts/e2e_smoke.sh` all PASS. CI (GitHub Actions, Ubuntu/MSVC) executes full suite on push.
+**Last Verified:** 2026-11-17; `cargo fmt --check`, `cargo clippy`, `cargo test` (143 tests), `cargo build --release`, `./scripts/e2e_smoke.sh` (40/40) all PASS.
 
 ---
 

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::{
     body::Body,
-    extract::Request,
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::Response,
@@ -9,7 +9,6 @@ use axum::{
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tracing::warn;
 
 /// Rate limiter configuration
@@ -66,8 +65,6 @@ pub struct RateLimiter {
     config: RateLimitConfig,
     // Store request counts per key
     buckets: Arc<DashMap<String, (u32, Instant)>>,
-    // Cleanup interval
-    cleanup_interval: Duration,
 }
 
 impl RateLimiter {
@@ -88,11 +85,7 @@ impl RateLimiter {
             }
         });
 
-        Self {
-            config,
-            buckets,
-            cleanup_interval,
-        }
+        Self { config, buckets }
     }
 
     /// Extract rate limit key from request
@@ -174,20 +167,24 @@ pub async fn rate_limit_middleware(
     State(rate_limiter): State<Arc<RateLimiter>>,
     request: Request,
     next: Next,
-) -> Result<Response, StatusCode> {
+) -> Response {
     let path = request.uri().path().to_string();
     let headers = request.headers().clone();
     let extensions = request.extensions().clone();
 
-    if let Err(_) = rate_limiter
+    if rate_limiter
         .check_rate_limit(&headers, &extensions, &path)
         .await
+        .is_err()
     {
         warn!("Rate limit exceeded for path: {}", path);
-        return Err(StatusCode::TOO_MANY_REQUESTS);
+        return Response::builder()
+            .status(StatusCode::TOO_MANY_REQUESTS)
+            .body(Body::empty())
+            .unwrap();
     }
 
-    Ok(next.run(request).await)
+    next.run(request).await
 }
 
 /// Rate limiter state for use with Axum State

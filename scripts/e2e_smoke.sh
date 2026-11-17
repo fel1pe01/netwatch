@@ -112,6 +112,8 @@ tls:
   enabled: false
 ssrf:
   enabled: true
+  allow_loopback: true
+  allow_private_ips: true
 rate_limit:
   enabled: true
 EOF
@@ -200,7 +202,8 @@ start_server() {
 
     # Use a temporary database file for each test run
     local test_db="${WORK_DIR}/netwatch_${RANDOM}.sqlite"
-    NETWATCH_STORAGE_PATH="${test_db}" "${BINARY}" >>"${SERVER_LOG}" 2>&1 &
+    local config_file="${XDG_CONFIG_HOME}/netwatch.yaml"
+    NETWATCH_STORAGE_PATH="${test_db}" "${BINARY}" --config "${config_file}" >>"${SERVER_LOG}" 2>&1 &
     SERVER_PID=$!
 
     # Wait for server to be ready (hasta ~20 s: los runners de CI pueden ser lentos)

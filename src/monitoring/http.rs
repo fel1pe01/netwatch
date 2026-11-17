@@ -1,9 +1,7 @@
-use crate::monitoring::validation::{
-    validate_http_url, validate_redirect_url, validation_error_result, ValidatedTarget,
-};
+use crate::monitoring::validation::{validate_http_url, validate_redirect_url};
 use crate::monitoring::HealthCheckResult;
 use crate::ssrf::SsrfPolicy;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use reqwest::Client;
 use std::time::{Duration, Instant};
@@ -240,15 +238,17 @@ pub async fn check_http_with_ssrf(
     let now = Utc::now();
     let total_start = Instant::now();
 
+    // Clone policy for the redirect closure (requires 'static lifetime)
+    let redirect_policy = policy.clone();
+
     let client = Client::builder()
         .timeout(timeout_duration)
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
             // Validate each redirect
-            if let Ok(url) = attempt.url() {
-                if let Err(e) = validate_redirect_url(policy, url.as_str()) {
-                    tracing::warn!("Redirect blocked by SSRF policy: {}", e);
-                    return attempt.error(e.into());
-                }
+            let url = attempt.url();
+            if let Err(e) = validate_redirect_url(&redirect_policy, url.as_str()) {
+                tracing::warn!("Redirect blocked by SSRF policy: {}", e);
+                return attempt.error(e);
             }
             attempt.follow()
         }))
@@ -340,14 +340,16 @@ pub async fn check_http_with_phases_ssrf(
     let status_code: Option<u16>;
     let body_text: Option<String>;
 
+    // Clone policy for the redirect closure (requires 'static lifetime)
+    let redirect_policy = policy.clone();
+
     let client = Client::builder()
         .timeout(timeout_duration)
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if let Ok(url) = attempt.url() {
-                if let Err(e) = validate_redirect_url(policy, url.as_str()) {
-                    tracing::warn!("Redirect blocked by SSRF policy: {}", e);
-                    return attempt.error(e.into());
-                }
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            let url = attempt.url();
+            if let Err(e) = validate_redirect_url(&redirect_policy, url.as_str()) {
+                tracing::warn!("Redirect blocked by SSRF policy: {}", e);
+                return attempt.error(e);
             }
             attempt.follow()
         }))

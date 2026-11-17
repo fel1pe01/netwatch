@@ -1,9 +1,11 @@
-use netwatch::api::router;
+use netwatch::api::{router, AppState};
 use netwatch::auth::AuthState;
 use netwatch::metrics::AppMetrics;
 use netwatch::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
+use netwatch::rate_limit::{RateLimitConfig, RateLimiter};
+use netwatch::ssrf::{SsrfConfig, SsrfState};
 use netwatch::storage::Storage;
 use prometheus::core::Collector;
 use reqwest::Client;
@@ -28,10 +30,21 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
         token_header: "Authorization".to_string(),
     }));
 
+    // Use permissive SSRF config for testing (allow loopback/private IPs)
+    let test_ssrf_config = SsrfConfig {
+        allow_loopback: true,
+        allow_private_ips: true,
+        ..Default::default()
+    };
+    let ssrf_state = Arc::new(SsrfState::new(test_ssrf_config).unwrap());
+    let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
+
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = router(storage, auth_state).merge(axum::Router::new().route(
+    let app = router(app_state).merge(axum::Router::new().route(
         "/metrics",
         axum::routing::get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));

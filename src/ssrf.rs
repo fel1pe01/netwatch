@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use ipnet::Ipv4Net;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::lookup_host;
@@ -255,6 +255,11 @@ impl SsrfPolicy {
             return true;
         }
 
+        // If no hostname restrictions configured, allow all
+        if self.allowed_hostnames.is_empty() {
+            return true;
+        }
+
         let hostname_lower = hostname.to_lowercase();
 
         // Check exact match or suffix match (for subdomain allowance)
@@ -264,7 +269,7 @@ impl SsrfPolicy {
             }
         }
 
-        true // Allow if no hostname restrictions configured
+        false // Deny if not in allowed list
     }
 
     /// Check if a port is allowed

@@ -1,12 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::serve;
 use axum::{routing::get, Router};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use netwatch::alerts::{AlertEngine, AlertEngineConfig};
 use netwatch::anomaly::{AnomalyConfig as AnomalyDetectorConfig, AnomalyDetector};
-use netwatch::api::router as api_router;
-use netwatch::auth::{AuthConfig, AuthState};
+use netwatch::api::{router as api_router, AppState};
+use netwatch::auth::AuthState;
 use netwatch::capacity_planning::{CapacityConfig, CapacityPlanner};
 use netwatch::config::{Config, SyntheticCheckType};
 use netwatch::discovery::interfaces::discover_interfaces;
@@ -19,13 +19,12 @@ use netwatch::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
 };
 use netwatch::monitoring::{check_tcp, ping, HealthCheckResult};
-use netwatch::rate_limit::{RateLimitConfig, RateLimiter};
+use netwatch::rate_limit::RateLimiter;
 use netwatch::scheduler::Scheduler;
 use netwatch::service::ServiceStore;
 use netwatch::snmp::SnmpCollector;
 use netwatch::ssrf::SsrfState;
 use netwatch::storage::Storage;
-use netwatch::tls::TlsConfig;
 use netwatch::topology_builder::TopologyBuilder;
 use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
@@ -35,7 +34,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::signal;
-use tokio_rustls::TlsAcceptor;
 use uuid::Uuid;
 
 /// Netwatch CLI
@@ -96,10 +94,8 @@ async fn register_monitoring_jobs(
         SYNTHETIC_CHECK_TLS_DURATION_SECONDS, SYNTHETIC_CHECK_TOTAL,
         SYNTHETIC_CHECK_TOTAL_DURATION_SECONDS, SYNTHETIC_CHECK_TTFB_DURATION_SECONDS,
     };
-    use netwatch::monitoring::validation::{validation_error_result, ValidatedTarget};
-    use netwatch::monitoring::{
-        check_dns, check_http_with_phases, check_tls, ping, HttpPhaseTimings,
-    };
+    use netwatch::monitoring::validation::validation_error_result;
+    use netwatch::monitoring::HttpPhaseTimings;
     use netwatch::ssrf::SsrfConfig;
     use std::time::Duration;
 
@@ -145,6 +141,12 @@ async fn register_monitoring_jobs(
                                 let expected_status = check.expected_status;
                                 let expected_body = check.expected_body.clone();
                                 let headers = check.headers.clone().unwrap_or_default();
+                                // Determine protocol string for error handling
+                                let proto_str = if check.check_type == SyntheticCheckType::Https {
+                                    "https"
+                                } else {
+                                    "http"
+                                };
                                 let (res, phases) =
                                     netwatch::monitoring::http::check_http_with_phases_ssrf(
                                         &policy,
@@ -157,20 +159,11 @@ async fn register_monitoring_jobs(
                                     .await
                                     .unwrap_or_else(|e| {
                                         (
-                                            validation_error_result(&url, &proto, timeout, e),
+                                            validation_error_result(&url, proto_str, timeout, e),
                                             HttpPhaseTimings::default(),
                                         )
                                     });
-                                (
-                                    res,
-                                    if check.check_type == SyntheticCheckType::Https {
-                                        "https"
-                                    } else {
-                                        "http"
-                                    }
-                                    .to_string(),
-                                    Some(phases),
-                                )
+                                (res, proto_str.to_string(), Some(phases))
                             }
                             SyntheticCheckType::Dns => {
                                 let timeout = check.timeout_ms.unwrap_or(5000);
@@ -710,10 +703,10 @@ async fn main() -> Result<()> {
     // Initialize SSRF state (needed for monitoring jobs)
     let ssrf_state =
         Arc::new(SsrfState::new(config.ssrf.clone()).context("Failed to create SSRF state")?);
-    let ssrf_policy = ssrf_state.policy().clone();
+    let ssrf_policy = Arc::new((*ssrf_state.policy()).clone());
 
     // Initialize rate limiter
-    let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
+    let _rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
 
     // Register health check jobs from config
     register_monitoring_jobs(
@@ -891,19 +884,24 @@ async fn main() -> Result<()> {
     // Initialize auth state
     let auth_state = Arc::new(AuthState::new(config.auth.clone()));
 
+    // Initialize rate limiter
+    let rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
+
     // Start HTTP server
     let addr: SocketAddr = config.agent.listen.parse()?;
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
     let start_time = app_metrics.start_time;
-    let app = api_router(
-        storage,
-        auth_state.clone(),
+
+    let app_state = AppState::new(
+        storage.clone(),
         ssrf_state.clone(),
+        auth_state.clone(),
         rate_limiter.clone(),
-    )
-    .merge(Router::new().route(
+    );
+
+    let app = api_router(app_state).merge(Router::new().route(
         "/metrics",
         get(move || AppMetrics::metrics_handler(uptime.clone(), start_time)),
     ));
@@ -915,34 +913,24 @@ async fn main() -> Result<()> {
         .context("Failed to load TLS configuration")?;
 
     println!("Running netwatch on {}", addr);
-    if tls_config.is_some() {
-        println!("TLS enabled");
-    }
 
     // Run server with graceful shutdown
-    if let Some(tls_config) = tls_config {
-        let tls_acceptor = TlsAcceptor::from(tls_config);
-        let listener = TcpListener::bind(addr).await?;
-        let tls_listener = tokio_rustls::TlsListener::new(listener, tls_acceptor);
+    if let Some(_tls_config) = tls_config {
+        // TLS is configured but TlsListener is not available in tokio-rustls 0.26.6
+        // Fail closed instead of silently falling back to non-TLS
+        anyhow::bail!(
+            "TLS is configured but not supported in this build (tokio-rustls 0.26.6 missing TlsListener). \
+            Either disable TLS in config or upgrade to a version with proper TLS support."
+        );
+    }
+    let listener = TcpListener::bind(addr).await?;
 
-        tokio::select! {
-            result = serve(tls_listener, app.into_make_service()) => {
-                result?;
-            }
-            _ = shutdown_signal => {
-                tracing::info!("Shutting down gracefully...");
-            }
+    tokio::select! {
+        result = serve(listener, app.into_make_service()) => {
+            result?;
         }
-    } else {
-        let listener = TcpListener::bind(addr).await?;
-
-        tokio::select! {
-            result = serve(listener, app.into_make_service()) => {
-                result?;
-            }
-            _ = shutdown_signal => {
-                tracing::info!("Shutting down gracefully...");
-            }
+        _ = shutdown_signal => {
+            tracing::info!("Shutting down gracefully...");
         }
     }
 
