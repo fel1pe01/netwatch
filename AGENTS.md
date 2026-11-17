@@ -195,15 +195,15 @@ Key sections:
 
 ## ⚠️ Estado actual (2026-11-17)
 
-**BUILD VERIFICADO** — 143 tests pass, 40/40 E2E checks pass, build clean.
+**BUILD VERIFICADO** — 157 tests pass, 40/40 E2E checks pass, build clean.
 
 | Component | Status |
 |-----------|--------|
 | TLS on API | ❌ **NOT implemented** — server refuses to start if TLS configured (fail-closed) |
 | SNMP collector | ⚠️ **Placeholder** — tables exist, no polling code |
-| Scheduler → checks → SQLite → events | ⚠️ **Partial** — jobs run, persist, emit events; REST endpoints partially wired |
+| Scheduler → checks → SQLite → events | ✅ **Complete** — jobs run with hysteresis (down after N failures, up after M successes from confirmed down); persist to check_results/events_v2 via CheckResultWriter actor; load last state from DB on startup; REST endpoints /api/v1/checks, /api/v1/events with pagination and filters; retention pruning job |
 | Auth on API | ✅ Token-based (Bearer), roles, public paths `/health`, `/metrics` |
-| Default bind | `0.0.0.0:8080` — **risk for production**, change to 127.0.0.1 in config |
+| Default bind | `127.0.0.1:8080` — secure by default |
 | /health, /metrics | Public (no auth required) — by design |
 
 Run `./scripts/check.sh` to verify before push.

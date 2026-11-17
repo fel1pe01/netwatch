@@ -412,9 +412,9 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | Area | Status | Details |
 |------|--------|---------|
 | **Configuration** | **Implemented** | `Config` struct complete; `Config::from_path()` works; `--config` CLI flag added; config wired to server (listen address, log level, intervals) |
-| **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB); percentile/availability queries added |
-| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main()` via `Scheduler::new()`; registers health check jobs (ICMP, HTTP, DNS, TLS), **synthetic checks (HTTP/HTTPS/DNS/TCP/TLS)**, topology, SNMP, anomaly detection, capacity planning, **alert evaluation**; runs in background with semaphore pool; graceful shutdown on SIGINT |
-| **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; **alert events emitted**; `IncidentEngine` consumes events and manages incidents |
+| **Storage** | **Implemented** | `Storage::connect()` works; migrations run; API handlers use it via Axum state (`devices_handler` queries DB); percentile/availability queries added; **CheckResultWriter actor** (single writer via channel for check_results/events_v2); **pagination filters** for checks/events; **retention pruning**; **SQLite busy_timeout configurable** |
+| **Scheduler** | **Implemented** | `Scheduler` instantiated in `main()` via `Scheduler::new()`; registers health check jobs (ICMP, HTTP, DNS, TLS), **synthetic checks (HTTP/HTTPS/DNS/TCP/TLS)**, topology, SNMP, anomaly detection, capacity planning, **alert evaluation**, **retention pruning**; runs in background with semaphore pool; graceful shutdown on SIGINT; **hysteresis via StateTracker** (down after N failures, up after M successes from confirmed down); **loads last state from DB on startup** |
+| **EventBus** | **Implemented** | Broadcast channel (1000); topology changes emit events; check events emitted **only on state transitions** (up→down after N failures, down→up after M successes from confirmed down); anomaly events emitted; **alert events emitted**; `IncidentEngine` consumes events and manages incidents |
 | **Metrics** | **Implemented** | AppMetrics + health check metrics + **scheduler metrics** (`netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total`); cardinality enforced; uptime works |
 | **Synthetic Checks** | **Implemented** | HTTP/HTTPS/DNS/TCP/TLS checks integrated with scheduler via config `synthetic_checks`; configurable targets, headers, expected status/body, TLS cert validation |
 | **Alert Engine** | **Implemented** | `AlertEngine` with 5 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events |
@@ -433,7 +433,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **Anomaly Detection** | **Implemented** | `AnomalyDetector` with spike/drift/pattern break detection; baselines from observations; EventBus integration; scheduler job; incident correlation; dedup cache |
 | **Capacity Planning** | **Implemented** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job; **CLI/API exposed** |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
-| **Tests (Unit/Integration)** | ✅ 143 passing | **Re-verified 2026-11-17**; all unit/integration tests pass |
+| **Tests (Unit/Integration)** | ✅ 157 passing | **Re-verified 2026-11-17**; all unit/integration tests pass (143 original + 14 core_wiring) |
 | **E2E Smoke Test** | ✅ 40/40 passing | **Re-verified 2026-11-17**; `scripts/e2e_smoke.sh` all PASS |
 
 ---

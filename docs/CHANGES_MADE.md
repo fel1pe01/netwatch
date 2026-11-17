@@ -663,3 +663,97 @@ docs/
 ---
 
 *This completes Phase 1A. All quality gates pass. Ready for Phase 1B.*
+
+---
+
+### 1B-2: Scheduler Core Wiring (2026-11-17)
+
+**Status:** Verified Complete
+**Category:** Core Infrastructure / Monitoring
+
+**Changes:**
+
+1. **src/state_tracker.rs** (new module)
+   - Pure hysteresis logic extracted from main.rs
+   - `StateTracker` struct with `StateTrackerConfig` (consecutive_failures_threshold=3, consecutive_successes_threshold=1)
+   - `EntityState` tracks consecutive_failures, consecutive_successes, last_success, confirmed_state
+   - `process_check()` returns `StateTransition` with should_emit_event, event_type
+   - Events only on state transitions (up→down after N failures, down→up after M successes from confirmed down)
+   - Loads state from DB on startup to avoid false transitions after restart
+   - 7 unit tests: down after N failures, up after M successes, isolated failure no event, startup with down/up no false transition, different entities/types independent
+
+2. **src/monitoring_jobs.rs** (new module)
+   - Extracted `register_monitoring_jobs()` from main.rs
+   - Creates shared `StateTracker` with config from `scheduler` section
+   - Loads initial state from DB into StateTracker for each entity on startup
+   - Uses MAIN SSRF policy (not internal allow-loopback) — default config blocks loopback
+   - Registers retention pruning job (configurable retention days/interval)
+   - Legacy ICMP job also uses StateTracker
+
+3. **Config additions** in `scheduler` section:
+   - `consecutive_failures_threshold` (default 3)
+   - `consecutive_successes_threshold` (default 1)
+   - `check_results_retention_days` (default 30)
+   - `events_retention_days` (default 90)
+   - `retention_prune_interval` (default 3600s)
+   - `busy_timeout_ms` in `storage` section (default 5000ms)
+
+4. **New migrations** (append-only):
+   - `20261117000000_check_results.sql`: check_results table with entity_id, target, protocol, success, latency_ms, error, consecutive_failures, consecutive_successes, last_state_change, previous_state
+   - `20261117000001_events_v2.sql`: events_v2 table matching Event struct schema v2
+
+5. **Storage additions** (src/storage.rs):
+   - `CheckResultWriter` actor: single writer via mpsc channel for check_results and events_v2
+   - `get_check_results()`, `get_events()` with pagination filters (CheckResultsFilter, EventsFilter structs)
+   - `prune_old_data()` for retention cleanup
+   - `load_last_check_state()` loads last success + consecutive counters from DB
+   - SQLite `busy_timeout` configurable via `Storage::connect_with_options()`
+
+6. **API endpoints** (src/api.rs):
+   - `GET /api/v1/checks` with pagination (limit/offset clamped 1-1000/0+, filters: entity_id, entity_type, protocol, success, since, until)
+   - `GET /api/v1/events` with pagination (limit/offset clamped, filters: entity_id, entity_type, event_type, since, until)
+   - Parameter validation: negative limit/offset clamped, limit > 1000 clamped to 1000
+
+5. **Removed unused dependency**: `tower = "0.4"` from Cargo.toml
+
+6. **New test file** `tests/core_wiring_tests.rs` (14 tests):
+   - State tracker hysteresis transitions (down after N, up after M, isolated failure, startup recovery)
+   - Writer actor persistence for check_results and events_v2
+   - Retention pruning removes only old rows
+   - SQLite busy_timeout configured correctly
+   - SSRF: default config blocks loopback, relaxed config allows loopback
+   - API parameter validation (clamps limit/offset, 401 without token)
+   - Scheduler integration with local TCP listeners (no public IPs)
+   - ICMP check without ping binary fails explicitly (not false success)
+
+7. **Updated e2e smoke test** (`scripts/e2e_smoke.sh`) for new events paginated response format
+
+**Verification:**
+- `cargo fmt --check` ✅
+- `cargo clippy --all-targets --all-features -- -D warnings` ✅ (pre-existing tempfile warning only)
+- `cargo test --locked --all-targets --all-features --no-fail-fast`: 157 tests pass (47 lib + 0 main + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause)
+- `cargo build --release` ✅
+- `./scripts/e2e_smoke.sh`: 40/40 checks pass
+
+**Files Added:**
+- src/state_tracker.rs
+- src/monitoring_jobs.rs
+- tests/core_wiring_tests.rs
+- migrations/20261117000000_check_results.sql
+- migrations/20261117000001_events_v2.sql
+
+**Files Modified:**
+- src/lib.rs (added monitoring_jobs, state_tracker modules)
+- src/main.rs (uses monitoring_jobs, removed inline register_monitoring_jobs)
+- src/storage.rs (CheckResultWriter, pagination, busy_timeout)
+- src/events.rs (emit_check_state_change for state transitions only)
+- src/api.rs (checks_handler, events_handler)
+- src/config.rs (scheduler/storage config additions)
+- config.example.yaml (new config options)
+- tests/http_integration_tests.rs (events endpoint test updated)
+- scripts/e2e_smoke.sh (events test updated)
+- Cargo.toml (removed tower dependency)
+
+---
+
+*This completes 1B-2. All quality gates pass. Ready for 1B-3.*
