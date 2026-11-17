@@ -433,7 +433,7 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **Anomaly Detection** | **Implemented** | `AnomalyDetector` with spike/drift/pattern break detection; baselines from observations; EventBus integration; scheduler job; incident correlation; dedup cache |
 | **Capacity Planning** | **Implemented** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job; **CLI/API exposed** |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
-| **Tests (Unit/Integration)** | ✅ 157 passing | **Re-verified 2026-11-17**; all unit/integration tests pass (143 original + 14 core_wiring) |
+| **Tests (Unit/Integration)** | ✅ 155 passing | **Re-verified 2026-11-17**; all unit/integration tests pass |
 | **E2E Smoke Test** | ✅ 40/40 passing | **Re-verified 2026-11-17**; `scripts/e2e_smoke.sh` all PASS |
 
 ---

@@ -195,7 +195,7 @@ Key sections:
 
 ## ⚠️ Estado actual (2026-11-17)
 
-**BUILD VERIFICADO** — 157 tests pass, 40/40 E2E checks pass, build clean.
+**BUILD VERIFICADO** — 155 tests pass, 40/40 E2E checks pass, build clean.
 
 | Component | Status |
 |-----------|--------|

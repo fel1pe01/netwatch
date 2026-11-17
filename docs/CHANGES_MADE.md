@@ -731,7 +731,7 @@ docs/
 **Verification:**
 - `cargo fmt --check` ✅
 - `cargo clippy --all-targets --all-features -- -D warnings` ✅ (pre-existing tempfile warning only)
-- `cargo test --locked --all-targets --all-features --no-fail-fast`: 157 tests pass (47 lib + 0 main + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause)
+- `cargo test --locked --all-targets --all-features --no-fail-fast`: 155 tests pass (47 lib + 0 main + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause)
 - `cargo build --release` ✅
 - `./scripts/e2e_smoke.sh`: 40/40 checks pass
 
