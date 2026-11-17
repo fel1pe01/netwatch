@@ -31,6 +31,11 @@ snmp:
 
 scheduler:
   concurrency: 10
+  consecutive_failures_threshold: 3
+  consecutive_successes_threshold: 1
+  check_results_retention_days: 30
+  events_retention_days: 90
+  retention_prune_interval: 3600
 
 capacity:
   enabled: true

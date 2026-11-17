@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, FromRow, Row, SqlitePool};
 use std::path::PathBuf;
+use tokio::sync::mpsc;
 
 pub struct Storage {
     pub pool: SqlitePool,
@@ -343,4 +344,399 @@ pub struct PercentileResult {
     pub sample_count: usize,
     pub window_start: DateTime<Utc>,
     pub window_end: DateTime<Utc>,
+}
+
+/// Check result for persistence (single-writer actor pattern)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckResult {
+    pub id: String,
+    pub entity_id: String,
+    pub entity_type: String,
+    pub target: String,
+    pub protocol: String,
+    pub success: bool,
+    pub latency_ms: Option<u128>,
+    pub error: Option<String>,
+    pub consecutive_failures: u32,
+    pub consecutive_successes: u32,
+    pub last_state_change: bool,
+    pub previous_state: Option<bool>,
+    pub observed_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Event v2 for persistence (matching Event struct)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventV2 {
+    pub id: String,
+    pub schema_version: u32,
+    pub event_type: String,
+    pub event_ts: DateTime<Utc>,
+    pub observed_ts: DateTime<Utc>,
+    pub entity_id: String,
+    pub entity_type: String,
+    pub severity: String,
+    pub state: String,
+    pub source: String,
+    pub evidence: String, // JSON
+    pub dedup_key: String,
+    pub correlation_id: Option<String>,
+    pub trace_id: Option<String>,
+    pub metadata: String, // JSON
+    pub created_at: DateTime<Utc>,
+}
+
+/// Message for the check result writer actor
+#[derive(Debug)]
+pub enum CheckResultMessage {
+    WriteCheckResult(CheckResult),
+    WriteEvent(EventV2),
+    Shutdown,
+}
+
+/// Check result writer actor - single writer for check_results and events_v2 tables
+pub struct CheckResultWriter {
+    pool: SqlitePool,
+    rx: mpsc::Receiver<CheckResultMessage>,
+}
+
+impl CheckResultWriter {
+    pub fn new(pool: SqlitePool, buffer: usize) -> (Self, mpsc::Sender<CheckResultMessage>) {
+        let (tx, rx) = mpsc::channel(buffer);
+        let writer = Self { pool, rx };
+        (writer, tx)
+    }
+
+    pub async fn run(mut self) {
+        while let Some(msg) = self.rx.recv().await {
+            match msg {
+                CheckResultMessage::WriteCheckResult(cr) => {
+                    if let Err(e) = self.write_check_result(&cr).await {
+                        tracing::error!("Failed to write check result: {}", e);
+                    }
+                }
+                CheckResultMessage::WriteEvent(ev) => {
+                    if let Err(e) = self.write_event(&ev).await {
+                        tracing::error!("Failed to write event: {}", e);
+                    }
+                }
+                CheckResultMessage::Shutdown => {
+                    tracing::info!("CheckResultWriter shutting down");
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn write_check_result(&self, cr: &CheckResult) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO check_results (
+                id, entity_id, entity_type, target, protocol, success, latency_ms,
+                error, consecutive_failures, consecutive_successes, last_state_change,
+                previous_state, observed_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&cr.id)
+        .bind(&cr.entity_id)
+        .bind(&cr.entity_type)
+        .bind(&cr.target)
+        .bind(&cr.protocol)
+        .bind(cr.success)
+        .bind(cr.latency_ms.map(|v| v as i64))
+        .bind(&cr.error)
+        .bind(cr.consecutive_failures as i64)
+        .bind(cr.consecutive_successes as i64)
+        .bind(cr.last_state_change)
+        .bind(cr.previous_state)
+        .bind(cr.observed_at.to_rfc3339())
+        .bind(cr.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn write_event(&self, ev: &EventV2) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO events_v2 (
+                id, schema_version, event_type, event_ts, observed_ts,
+                entity_id, entity_type, severity, state, source,
+                evidence, dedup_key, correlation_id, trace_id, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&ev.id)
+        .bind(ev.schema_version as i64)
+        .bind(&ev.event_type)
+        .bind(ev.event_ts.to_rfc3339())
+        .bind(ev.observed_ts.to_rfc3339())
+        .bind(&ev.entity_id)
+        .bind(&ev.entity_type)
+        .bind(&ev.severity)
+        .bind(&ev.state)
+        .bind(&ev.source)
+        .bind(&ev.evidence)
+        .bind(&ev.dedup_key)
+        .bind(&ev.correlation_id)
+        .bind(&ev.trace_id)
+        .bind(&ev.metadata)
+        .bind(ev.created_at.to_rfc3339())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+}
+
+/// Load last known state for an entity from check_results
+pub async fn load_last_check_state(
+    pool: &SqlitePool,
+    entity_id: &str,
+    entity_type: &str,
+) -> Result<Option<(bool, u32, u32)>> {
+    // Returns (last_success, consecutive_failures, consecutive_successes)
+    let row = sqlx::query(
+        r#"
+        SELECT success, consecutive_failures, consecutive_successes
+        FROM check_results
+        WHERE entity_id = ? AND entity_type = ?
+        ORDER BY observed_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(entity_id)
+    .bind(entity_type)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(row) = row {
+        let success: bool = row.get("success");
+        let consecutive_failures: i64 = row.get("consecutive_failures");
+        let consecutive_successes: i64 = row.get("consecutive_successes");
+        Ok(Some((
+            success,
+            consecutive_failures as u32,
+            consecutive_successes as u32,
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Prune old check_results and events_v2 based on retention config
+pub async fn prune_old_data(
+    pool: &SqlitePool,
+    check_results_retention_days: u32,
+    events_retention_days: u32,
+) -> Result<(u64, u64)> {
+    let check_cutoff = Utc::now() - chrono::Duration::days(check_results_retention_days as i64);
+    let events_cutoff = Utc::now() - chrono::Duration::days(events_retention_days as i64);
+
+    let check_deleted = sqlx::query("DELETE FROM check_results WHERE observed_at < ?")
+        .bind(check_cutoff.to_rfc3339())
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+    let events_deleted = sqlx::query("DELETE FROM events_v2 WHERE event_ts < ?")
+        .bind(events_cutoff.to_rfc3339())
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+    Ok((check_deleted, events_deleted))
+}
+
+/// Filter parameters for check results query
+#[derive(Default)]
+pub struct CheckResultsFilter {
+    pub entity_id: Option<String>,
+    pub entity_type: Option<String>,
+    pub protocol: Option<String>,
+    pub success: Option<bool>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Get check results with pagination
+pub async fn get_check_results(
+    pool: &SqlitePool,
+    filter: CheckResultsFilter,
+) -> Result<Vec<CheckResult>> {
+    let mut query = String::from("SELECT * FROM check_results WHERE 1=1");
+    let mut args: Vec<String> = vec![];
+
+    if let Some(eid) = filter.entity_id {
+        query.push_str(" AND entity_id = ?");
+        args.push(eid);
+    }
+    if let Some(etype) = filter.entity_type {
+        query.push_str(" AND entity_type = ?");
+        args.push(etype);
+    }
+    if let Some(proto) = filter.protocol {
+        query.push_str(" AND protocol = ?");
+        args.push(proto);
+    }
+    if let Some(s) = filter.success {
+        query.push_str(" AND success = ?");
+        args.push(s.to_string());
+    }
+    if let Some(s) = filter.since {
+        query.push_str(" AND observed_at >= ?");
+        args.push(s.to_rfc3339());
+    }
+    if let Some(u) = filter.until {
+        query.push_str(" AND observed_at <= ?");
+        args.push(u.to_rfc3339());
+    }
+
+    query.push_str(" ORDER BY observed_at DESC LIMIT ? OFFSET ?");
+    args.push(filter.limit.to_string());
+    args.push(filter.offset.to_string());
+
+    let mut q = sqlx::query_as::<_, CheckResultRow>(&query);
+    for arg in args {
+        q = q.bind(arg);
+    }
+    let rows = q.fetch_all(pool).await?;
+    rows.into_iter().map(|r| r.into_check_result()).collect()
+}
+
+/// Filter parameters for events query
+#[derive(Default)]
+pub struct EventsFilter {
+    pub entity_id: Option<String>,
+    pub entity_type: Option<String>,
+    pub event_type: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Get events with pagination
+pub async fn get_events(
+    pool: &SqlitePool,
+    filter: EventsFilter,
+) -> Result<Vec<EventV2>> {
+    let mut query = String::from("SELECT * FROM events_v2 WHERE 1=1");
+    let mut args: Vec<String> = vec![];
+
+    if let Some(eid) = filter.entity_id {
+        query.push_str(" AND entity_id = ?");
+        args.push(eid);
+    }
+    if let Some(etype) = filter.entity_type {
+        query.push_str(" AND entity_type = ?");
+        args.push(etype);
+    }
+    if let Some(etype) = filter.event_type {
+        query.push_str(" AND event_type = ?");
+        args.push(etype);
+    }
+    if let Some(s) = filter.since {
+        query.push_str(" AND event_ts >= ?");
+        args.push(s.to_rfc3339());
+    }
+    if let Some(u) = filter.until {
+        query.push_str(" AND event_ts <= ?");
+        args.push(u.to_rfc3339());
+    }
+
+    query.push_str(" ORDER BY event_ts DESC LIMIT ? OFFSET ?");
+    args.push(filter.limit.to_string());
+    args.push(filter.offset.to_string());
+
+    let mut q = sqlx::query_as::<_, EventV2Row>(&query);
+    for arg in args {
+        q = q.bind(arg);
+    }
+    let rows = q.fetch_all(pool).await?;
+    rows.into_iter().map(|r| r.into_event()).collect()
+}
+
+#[derive(FromRow)]
+struct CheckResultRow {
+    id: String,
+    entity_id: String,
+    entity_type: String,
+    target: String,
+    protocol: String,
+    success: bool,
+    latency_ms: Option<i64>,
+    error: Option<String>,
+    consecutive_failures: i64,
+    consecutive_successes: i64,
+    last_state_change: bool,
+    previous_state: Option<bool>,
+    observed_at: String,
+    created_at: String,
+}
+
+impl CheckResultRow {
+    fn into_check_result(self) -> Result<CheckResult> {
+        Ok(CheckResult {
+            id: self.id,
+            entity_id: self.entity_id,
+            entity_type: self.entity_type,
+            target: self.target,
+            protocol: self.protocol,
+            success: self.success,
+            latency_ms: self.latency_ms.map(|v| v as u128),
+            error: self.error,
+            consecutive_failures: self.consecutive_failures as u32,
+            consecutive_successes: self.consecutive_successes as u32,
+            last_state_change: self.last_state_change,
+            previous_state: self.previous_state,
+            observed_at: self.observed_at.parse()?,
+            created_at: self.created_at.parse()?,
+        })
+    }
+}
+
+#[derive(FromRow)]
+struct EventV2Row {
+    id: String,
+    schema_version: i64,
+    event_type: String,
+    event_ts: String,
+    observed_ts: String,
+    entity_id: String,
+    entity_type: String,
+    severity: String,
+    state: String,
+    source: String,
+    evidence: String,
+    dedup_key: String,
+    correlation_id: Option<String>,
+    trace_id: Option<String>,
+    metadata: String,
+    created_at: String,
+}
+
+impl EventV2Row {
+    fn into_event(self) -> Result<EventV2> {
+        Ok(EventV2 {
+            id: self.id,
+            schema_version: self.schema_version as u32,
+            event_type: self.event_type,
+            event_ts: self.event_ts.parse()?,
+            observed_ts: self.observed_ts.parse()?,
+            entity_id: self.entity_id,
+            entity_type: self.entity_type,
+            severity: self.severity,
+            state: self.state,
+            source: self.source,
+            evidence: self.evidence,
+            dedup_key: self.dedup_key,
+            correlation_id: self.correlation_id,
+            trace_id: self.trace_id,
+            metadata: self.metadata,
+            created_at: self.created_at.parse()?,
+        })
+    }
 }

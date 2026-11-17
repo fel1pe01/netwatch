@@ -24,7 +24,10 @@ use netwatch::scheduler::Scheduler;
 use netwatch::service::ServiceStore;
 use netwatch::snmp::SnmpCollector;
 use netwatch::ssrf::SsrfState;
-use netwatch::storage::Storage;
+use netwatch::storage::{
+    load_last_check_state, prune_old_data, CheckResult, CheckResultMessage, CheckResultWriter,
+    Storage,
+};
 use netwatch::topology_builder::TopologyBuilder;
 use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
@@ -85,6 +88,7 @@ async fn register_monitoring_jobs(
     scheduler: &mut Scheduler,
     storage: Arc<Storage>,
     event_bus: Arc<EventBus>,
+    check_result_tx: tokio::sync::mpsc::Sender<CheckResultMessage>,
     config: &Config,
     ssrf_policy: Arc<netwatch::ssrf::SsrfPolicy>,
 ) -> Result<()> {
@@ -96,19 +100,13 @@ async fn register_monitoring_jobs(
     };
     use netwatch::monitoring::validation::validation_error_result;
     use netwatch::monitoring::HttpPhaseTimings;
-    use netwatch::ssrf::SsrfConfig;
     use std::time::Duration;
-
-    // Create internal SSRF policy for legacy health checks (allows loopback)
-    let internal_ssrf_config = SsrfConfig {
-        allow_loopback: true,
-        ..config.ssrf.clone()
-    };
-    let internal_ssrf_policy = Arc::new(netwatch::ssrf::SsrfPolicy::new(internal_ssrf_config)?);
 
     // Register synthetic checks from config
     if config.synthetic_checks.enabled.unwrap_or(true) {
         let interval = Duration::from_secs(config.synthetic_checks.interval.unwrap_or(60));
+        let failures_threshold = config.scheduler.consecutive_failures_threshold.unwrap_or(3);
+        let successes_threshold = config.scheduler.consecutive_successes_threshold.unwrap_or(1);
 
         for check in &config.synthetic_checks.checks {
             if !check.enabled {
@@ -117,18 +115,37 @@ async fn register_monitoring_jobs(
 
             let storage = storage.clone();
             let event_bus = event_bus.clone();
+            let check_result_tx = check_result_tx.clone();
             let check_config = check.clone();
             let policy = ssrf_policy.clone();
             let job_name = format!("synthetic_check_{}", check.id);
+            let entity_id = check.id.clone();
+            let entity_type = EntityType::Service;
+
+            // Load initial state from DB
+            let initial_state =
+                load_last_check_state(&storage.pool, &entity_id, &format!("{:?}", entity_type))
+                    .await?;
+            let (consecutive_failures, consecutive_successes, _last_success) = initial_state
+                .map(|(s, cf, cs)| (cf, cs, Some(s)))
+                .unwrap_or((0, 0, None));
 
             let job = netwatch::scheduler::Job {
                 name: job_name.clone(),
                 interval,
                 task: Arc::new(move || {
-                    let storage = storage.clone();
                     let event_bus = event_bus.clone();
+                    let check_result_tx = check_result_tx.clone();
                     let check = check_config.clone();
                     let policy = policy.clone();
+                    let entity_id = entity_id.clone();
+                    let entity_type = entity_type.clone();
+                    let failures_threshold = failures_threshold;
+                    let successes_threshold = successes_threshold;
+                    let mut consecutive_failures = consecutive_failures;
+                    let mut consecutive_successes = consecutive_successes;
+                    let mut last_success: Option<bool> = None;
+                    #[allow(unused_assignments)]
                     Box::pin(async move {
                         let (res, proto, phase_timings) = match check.check_type {
                             SyntheticCheckType::Http | SyntheticCheckType::Https => {
@@ -141,7 +158,6 @@ async fn register_monitoring_jobs(
                                 let expected_status = check.expected_status;
                                 let expected_body = check.expected_body.clone();
                                 let headers = check.headers.clone().unwrap_or_default();
-                                // Determine protocol string for error handling
                                 let proto_str = if check.check_type == SyntheticCheckType::Https {
                                     "https"
                                 } else {
@@ -262,29 +278,68 @@ async fn register_monitoring_jobs(
                             }
                         }
 
-                        // Persist observation to database
-                        let device_id = check.id.clone();
-                        if let Err(e) = persist_observation(&storage, &res, &device_id).await {
-                            tracing::error!("Failed to persist observation: {}", e);
+                        // Update consecutive counters
+                        let previous_state = last_success;
+                        if res.success {
+                            consecutive_successes += 1;
+                            consecutive_failures = 0;
+                        } else {
+                            consecutive_failures += 1;
+                            consecutive_successes = 0;
                         }
+                        last_success = Some(res.success);
 
-                        // Emit check completed/failed event
-                        let check_evidence = CheckEvidence {
+                        // Determine if hysteresis threshold crossed for event emission
+                        // Down event: only after N consecutive failures
+                        // Up event: only after M consecutive successes
+                        let emit_down_event = !res.success && consecutive_failures >= failures_threshold;
+                        let emit_up_event = res.success && consecutive_successes >= successes_threshold;
+                        let should_emit_event = emit_down_event || emit_up_event;
+
+                        // Persist check result via actor
+                        let check_result = CheckResult {
+                            id: Uuid::new_v4().to_string(),
+                            entity_id: entity_id.clone(),
+                            entity_type: format!("{:?}", entity_type),
                             target: res.target.clone(),
                             protocol: res.protocol.clone(),
                             success: res.success,
                             latency_ms: res.latency_ms,
                             error: res.error.clone(),
+                            consecutive_failures,
+                            consecutive_successes,
+                            last_state_change: should_emit_event,
+                            previous_state,
+                            observed_at: res.observed_at,
+                            created_at: Utc::now(),
                         };
-                        if let Err(e) = event_bus
-                            .emit_check_completed(
-                                device_id.clone(),
-                                EntityType::Service,
-                                check_evidence,
-                            )
+                        if let Err(e) = check_result_tx
+                            .send(CheckResultMessage::WriteCheckResult(check_result))
                             .await
                         {
-                            tracing::error!("Failed to emit check event: {}", e);
+                            tracing::error!("Failed to send check result to writer: {}", e);
+                        }
+
+                        // Emit event ONLY when hysteresis threshold crossed
+                        if should_emit_event {
+                            let check_evidence = CheckEvidence {
+                                target: res.target.clone(),
+                                protocol: res.protocol.clone(),
+                                success: res.success,
+                                latency_ms: res.latency_ms,
+                                error: res.error.clone(),
+                            };
+                            if let Err(e) = event_bus
+                                .emit_check_state_change(
+                                    entity_id.clone(),
+                                    entity_type.clone(),
+                                    check_evidence,
+                                    previous_state,
+                                )
+                                .await
+                            {
+                                tracing::error!("Failed to emit check state change event: {}", e);
+                            }
                         }
 
                         Ok(())
@@ -300,18 +355,37 @@ async fn register_monitoring_jobs(
 
     if !has_synthetic_checks && config.health.interval > 0 {
         let interval = Duration::from_secs(config.health.interval);
+        let failures_threshold = config.scheduler.consecutive_failures_threshold.unwrap_or(3);
+        let successes_threshold = config.scheduler.consecutive_successes_threshold.unwrap_or(1);
 
-        // ICMP health check job (legacy) - uses internal SSRF policy that allows loopback
-        let storage = storage.clone();
         let event_bus = event_bus.clone();
-        let internal_policy = internal_ssrf_policy.clone();
+        let check_result_tx = check_result_tx.clone();
+        let policy = ssrf_policy.clone(); // Use MAIN policy (not internal)
+        let entity_id = "local".to_string();
+        let entity_type = EntityType::Device;
+
+        // Load initial state from DB
+        let initial_state =
+            load_last_check_state(&storage.pool, &entity_id, &format!("{:?}", entity_type)).await?;
+        let (consecutive_failures, consecutive_successes, _last_success) = initial_state
+            .map(|(s, cf, cs)| (cf, cs, Some(s)))
+            .unwrap_or((0, 0, None));
+
         let job = netwatch::scheduler::Job {
             name: "health_check_icmp".to_string(),
             interval,
             task: Arc::new(move || {
-                let storage = storage.clone();
                 let event_bus = event_bus.clone();
-                let policy = internal_policy.clone();
+                let check_result_tx = check_result_tx.clone();
+                let policy = policy.clone();
+                let entity_id = entity_id.clone();
+                let entity_type = entity_type.clone();
+                let failures_threshold = failures_threshold;
+                let successes_threshold = successes_threshold;
+                let mut consecutive_failures = consecutive_failures;
+                let mut consecutive_successes = consecutive_successes;
+                let mut last_success: Option<bool> = None;
+                #[allow(unused_assignments)]
                 Box::pin(async move {
                     let res =
                         netwatch::monitoring::icmp::ping_with_ssrf(&policy, "127.0.0.1", 2000)
@@ -335,28 +409,68 @@ async fn register_monitoring_jobs(
                             .observe(latency_seconds);
                     }
 
-                    // Persist observation to database
-                    if let Err(e) = persist_observation(&storage, &res, "local").await {
-                        tracing::error!("Failed to persist observation: {}", e);
+                    // Update consecutive counters
+                    let previous_state = last_success;
+                    if res.success {
+                        consecutive_successes += 1;
+                        consecutive_failures = 0;
+                    } else {
+                        consecutive_failures += 1;
+                        consecutive_successes = 0;
                     }
+                    last_success = Some(res.success);
 
-                    // Emit check completed/failed event
-                    let check_evidence = CheckEvidence {
+                    // Determine if hysteresis threshold crossed for event emission
+                    // Down event: only after N consecutive failures
+                    // Up event: only after M consecutive successes
+                    let emit_down_event = !res.success && consecutive_failures >= failures_threshold;
+                    let emit_up_event = res.success && consecutive_successes >= successes_threshold;
+                    let should_emit_event = emit_down_event || emit_up_event;
+
+                    // Persist check result via actor
+                    let check_result = CheckResult {
+                        id: Uuid::new_v4().to_string(),
+                        entity_id: entity_id.clone(),
+                        entity_type: format!("{:?}", entity_type),
                         target: res.target.clone(),
                         protocol: res.protocol.clone(),
                         success: res.success,
                         latency_ms: res.latency_ms,
                         error: res.error.clone(),
+                        consecutive_failures,
+                        consecutive_successes,
+                        last_state_change: should_emit_event,
+                        previous_state,
+                        observed_at: res.observed_at,
+                        created_at: Utc::now(),
                     };
-                    if let Err(e) = event_bus
-                        .emit_check_completed(
-                            "local".to_string(),
-                            EntityType::Device,
-                            check_evidence,
-                        )
+                    if let Err(e) = check_result_tx
+                        .send(CheckResultMessage::WriteCheckResult(check_result))
                         .await
                     {
-                        tracing::error!("Failed to emit check event: {}", e);
+                        tracing::error!("Failed to send check result to writer: {}", e);
+                    }
+
+                    // Emit event ONLY when hysteresis threshold crossed
+                    if should_emit_event {
+                        let check_evidence = CheckEvidence {
+                            target: res.target.clone(),
+                            protocol: res.protocol.clone(),
+                            success: res.success,
+                            latency_ms: res.latency_ms,
+                            error: res.error.clone(),
+                        };
+                        if let Err(e) = event_bus
+                            .emit_check_state_change(
+                                entity_id.clone(),
+                                entity_type.clone(),
+                                check_evidence,
+                                previous_state,
+                            )
+                            .await
+                        {
+                            tracing::error!("Failed to emit check state change event: {}", e);
+                        }
                     }
 
                     Ok(())
@@ -365,40 +479,6 @@ async fn register_monitoring_jobs(
         };
         scheduler.add_job(job);
     }
-
-    Ok(())
-}
-
-async fn persist_observation(
-    storage: &Storage,
-    result: &HealthCheckResult,
-    device_id: &str,
-) -> Result<()> {
-    use sqlx::query;
-    let id = Uuid::new_v4().to_string();
-    let now = Utc::now().to_rfc3339();
-    let metric = format!("{}_latency_ms", result.protocol);
-    let value = result.latency_ms.unwrap_or(0) as f64;
-    let source = result.evidence.clone();
-    let confidence = if result.success { "high" } else { "low" }.to_string();
-
-    query(
-        r#"
-        INSERT INTO observations (id, device_id, metric, value, source, confidence, observed_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        "#,
-    )
-    .bind(&id)
-    .bind(device_id)
-    .bind(&metric)
-    .bind(value)
-    .bind(&source)
-    .bind(&confidence)
-    .bind(&now)
-    .bind(&now)
-    .bind(&now)
-    .execute(&storage.pool)
-    .await?;
 
     Ok(())
 }
@@ -708,15 +788,52 @@ async fn main() -> Result<()> {
     // Initialize rate limiter
     let _rate_limiter = Arc::new(RateLimiter::new(config.rate_limit.clone()));
 
+    // Initialize CheckResultWriter actor (single writer for check_results and events_v2)
+    let (check_result_writer, check_result_tx) = CheckResultWriter::new(storage.pool.clone(), 1000);
+    let check_result_writer_handle = tokio::spawn(async move {
+        check_result_writer.run().await;
+    });
+
     // Register health check jobs from config
     register_monitoring_jobs(
         &mut scheduler,
         storage.clone(),
         event_bus.clone(),
+        check_result_tx.clone(),
         &config,
         ssrf_policy,
     )
     .await?;
+
+    // Register retention pruning job
+    let check_results_retention_days = config.scheduler.check_results_retention_days.unwrap_or(30);
+    let events_retention_days = config.scheduler.events_retention_days.unwrap_or(90);
+    let prune_interval =
+        Duration::from_secs(config.scheduler.retention_prune_interval.unwrap_or(3600));
+    let prune_storage = storage.clone();
+    let job = netwatch::scheduler::Job {
+        name: "retention_prune".to_string(),
+        interval: prune_interval,
+        task: Arc::new(move || {
+            let storage = prune_storage.clone();
+            let check_results_retention_days = check_results_retention_days;
+            let events_retention_days = events_retention_days;
+            Box::pin(async move {
+                tracing::info!("Running retention pruning...");
+                if let Err(e) = prune_old_data(
+                    &storage.pool,
+                    check_results_retention_days,
+                    events_retention_days,
+                )
+                .await
+                {
+                    tracing::error!("Retention pruning failed: {}", e);
+                }
+                Ok(())
+            })
+        }),
+    };
+    scheduler.add_job(job);
 
     // Register topology discovery job
     if config.discovery.enabled && config.discovery.interval > 0 {
@@ -872,11 +989,16 @@ async fn main() -> Result<()> {
     });
 
     // Set up graceful shutdown
+    let check_result_tx_shutdown = check_result_tx.clone();
     let shutdown_signal = async move {
         signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
         tracing::info!("Shutdown signal received");
+        // Signal check result writer to shutdown
+        let _ = check_result_tx_shutdown
+            .send(CheckResultMessage::Shutdown)
+            .await;
         // Give scheduler time to finish current jobs
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     };
@@ -937,6 +1059,8 @@ async fn main() -> Result<()> {
     // Shutdown scheduler
     scheduler_handle.abort();
     incident_engine_handle.abort();
+    // Wait for check result writer to finish
+    let _ = check_result_writer_handle.await;
 
     Ok(())
 }

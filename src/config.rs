@@ -121,6 +121,29 @@ pub enum SyntheticCheckType {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SchedulerConfig {
     pub concurrency: usize,
+    /// Number of consecutive failures before emitting a down event/opening incident (default: 3)
+    pub consecutive_failures_threshold: Option<u32>,
+    /// Number of consecutive successes before emitting an up event/resolving incident (default: 1)
+    pub consecutive_successes_threshold: Option<u32>,
+    /// Retention period for check_results in days (default: 30)
+    pub check_results_retention_days: Option<u32>,
+    /// Retention period for events in days (default: 90)
+    pub events_retention_days: Option<u32>,
+    /// Interval for retention pruning job in seconds (default: 3600)
+    pub retention_prune_interval: Option<u64>,
+}
+
+impl Default for SchedulerConfig {
+    fn default() -> Self {
+        Self {
+            concurrency: 10,
+            consecutive_failures_threshold: Some(3),
+            consecutive_successes_threshold: Some(1),
+            check_results_retention_days: Some(30),
+            events_retention_days: Some(90),
+            retention_prune_interval: Some(3600),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -270,7 +293,7 @@ impl Default for Config {
                 enabled: true,
                 interval: 60,
             },
-            scheduler: SchedulerConfig { concurrency: 10 },
+            scheduler: SchedulerConfig::default(),
             capacity: CapacityConfig {
                 enabled: Some(true),
                 interval: Some(3600),

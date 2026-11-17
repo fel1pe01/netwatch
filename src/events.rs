@@ -244,6 +244,52 @@ impl EventBus {
             .map_err(|e| EventError::Broadcast(Box::new(e)))
     }
 
+    /// Emit a check result event ONLY on state change (up->down or down->up)
+    /// Returns true if event was emitted (state changed), false if no state change
+    pub async fn emit_check_state_change(
+        &self,
+        entity_id: String,
+        entity_type: EntityType,
+        check_result: CheckEvidence,
+        previous_state: Option<bool>,
+    ) -> Result<bool, EventError> {
+        // Only emit if state changed
+        let state_changed = previous_state.is_some_and(|prev| prev != check_result.success);
+        if !state_changed {
+            return Ok(false);
+        }
+
+        let event_type = if check_result.success {
+            EventType::CheckCompleted // up event (recovery)
+        } else {
+            EventType::CheckFailed // down event
+        };
+        let severity = if check_result.success {
+            Severity::Info
+        } else {
+            Severity::Warning
+        };
+        let event = Event::new(
+            event_type,
+            entity_id,
+            entity_type,
+            severity,
+            "monitoring".to_string(),
+            EventEvidence {
+                check_result: Some(check_result),
+                threshold: None,
+                topology_diff: None,
+                collector_error: None,
+                anomaly: None,
+                raw: None,
+            },
+        );
+        self.emit(event).await?;
+        Ok(true)
+    }
+
+    /// Legacy method - emits on every check (for backward compatibility)
+    /// Use emit_check_state_change for new code
     pub async fn emit_check_completed(
         &self,
         entity_id: String,
