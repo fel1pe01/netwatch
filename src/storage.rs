@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{sqlite::SqliteConnectOptions, sqlite::SqlitePoolOptions, FromRow, Row, SqlitePool};
 use std::path::PathBuf;
+use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub struct Storage {
@@ -10,7 +11,13 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Connect with default busy_timeout (5000ms)
     pub async fn connect(path: &str) -> Result<Self> {
+        Self::connect_with_options(path, 5000).await
+    }
+
+    /// Connect with custom busy_timeout in milliseconds
+    pub async fn connect_with_options(path: &str, busy_timeout_ms: u32) -> Result<Self> {
         let file = PathBuf::from(path);
         if !file.exists() {
             std::fs::create_dir_all(file.parent().unwrap()).with_context(|| "create data dir")?;
@@ -19,7 +26,8 @@ impl Storage {
             .filename(path)
             .create_if_missing(true)
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-            .foreign_keys(true);
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_millis(busy_timeout_ms as u64));
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .connect_with(opts)
@@ -619,10 +627,7 @@ pub struct EventsFilter {
 }
 
 /// Get events with pagination
-pub async fn get_events(
-    pool: &SqlitePool,
-    filter: EventsFilter,
-) -> Result<Vec<EventV2>> {
+pub async fn get_events(pool: &SqlitePool, filter: EventsFilter) -> Result<Vec<EventV2>> {
     let mut query = String::from("SELECT * FROM events_v2 WHERE 1=1");
     let mut args: Vec<String> = vec![];
 

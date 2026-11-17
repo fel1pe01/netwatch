@@ -17,6 +17,17 @@ pub struct AgentConfig {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct StorageConfig {
     pub path: String,
+    /// SQLite busy timeout in milliseconds (default: 5000)
+    pub busy_timeout_ms: Option<u32>,
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            path: "netwatch.sqlite".to_string(),
+            busy_timeout_ms: Some(5000),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -278,6 +289,7 @@ impl Default for Config {
             },
             storage: StorageConfig {
                 path: "netwatch.sqlite".to_string(),
+                busy_timeout_ms: Some(5000),
             },
             metrics: MetricsConfig { enabled: true },
             api: ApiConfig { enabled: true },

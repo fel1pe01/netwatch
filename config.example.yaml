@@ -7,6 +7,7 @@ agent:
 
 storage:
   path: "/data/netwatch.sqlite"
+  busy_timeout_ms: 5000
 
 metrics:
   enabled: true

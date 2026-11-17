@@ -285,15 +285,15 @@ async fn http_placeholder_endpoints() {
     let (base_url, _handle) = spawn_test_server().await;
     let client = Client::new();
 
-    let endpoints = [
+    // These endpoints return empty arrays
+    let array_endpoints = [
         "/api/v1/vlans",
         "/api/v1/subnets",
         "/api/v1/gateways",
-        "/api/v1/events",
         "/api/v1/topology",
     ];
 
-    for endpoint in endpoints {
+    for endpoint in array_endpoints {
         let resp = client
             .get(format!("{}{}", base_url, endpoint))
             .send()
@@ -304,6 +304,21 @@ async fn http_placeholder_endpoints() {
         assert!(body.is_array());
         assert_eq!(body.as_array().unwrap().len(), 0);
     }
+
+    // Events endpoint returns paginated response object
+    let resp = client
+        .get(format!("{}/api/v1/events", base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert!(body.get("events").is_some());
+    assert!(body["events"].is_array());
+    assert_eq!(body["events"].as_array().unwrap().len(), 0);
+    assert!(body.get("limit").is_some());
+    assert!(body.get("offset").is_some());
+    assert!(body.get("count").is_some());
 }
 
 #[tokio::test]

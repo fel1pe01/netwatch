@@ -480,15 +480,14 @@ test_http_monitor_tcp_failure() {
 }
 
 test_http_placeholder_endpoints() {
-    local endpoints=(
+    local array_endpoints=(
         "/api/v1/vlans"
         "/api/v1/subnets"
         "/api/v1/gateways"
-        "/api/v1/events"
         "/api/v1/topology"
     )
     local ep resp
-    for ep in "${endpoints[@]}"; do
+    for ep in "${array_endpoints[@]}"; do
         assert_status "${BASE_URL}${ep}" "200" "HTTP GET ${ep}"
         resp=$(curl -s "${BASE_URL}${ep}" 2>/dev/null)
         if jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<< "${resp}"; then
@@ -497,6 +496,16 @@ test_http_placeholder_endpoints() {
             fail "HTTP ${ep}: expected empty array, got: ${resp}"
         fi
     done
+
+    # Events endpoint returns paginated response object
+    local ep="/api/v1/events"
+    assert_status "${BASE_URL}${ep}" "200" "HTTP GET ${ep}"
+    resp=$(curl -s "${BASE_URL}${ep}" 2>/dev/null)
+    if jq -e '(.events | type == "array" and length == 0) and (.limit | type == "number") and (.offset | type == "number") and (.count | type == "number")' >/dev/null 2>&1 <<< "${resp}"; then
+        pass "HTTP ${ep}: paginated response with empty events array"
+    else
+        fail "HTTP ${ep}: expected paginated response with empty events array, got: ${resp}"
+    fi
 
     # Test /api/v1/devices returns new format
     assert_status "${BASE_URL}/api/v1/devices" "200" "HTTP GET /api/v1/devices"

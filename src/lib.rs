@@ -30,6 +30,8 @@ pub mod metrics;
 mod metrics_handler_test;
 #[path = "monitoring/mod.rs"]
 pub mod monitoring;
+#[path = "monitoring_jobs.rs"]
+pub mod monitoring_jobs;
 #[path = "notifications.rs"]
 pub mod notifications;
 #[path = "rate_limit.rs"]
@@ -44,6 +46,8 @@ pub mod service;
 pub mod snmp;
 #[path = "ssrf.rs"]
 pub mod ssrf;
+#[path = "state_tracker.rs"]
+pub mod state_tracker;
 #[path = "storage.rs"]
 pub mod storage;
 #[path = "tls.rs"]

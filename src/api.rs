@@ -11,7 +11,7 @@ use crate::monitoring::HealthCheckResult;
 use crate::rate_limit::{rate_limit_middleware, RateLimitState};
 use crate::root_cause::RootCauseAnalyzer;
 use crate::ssrf::SsrfState;
-use crate::storage::Storage;
+use crate::storage::{get_check_results, get_events, CheckResultsFilter, EventsFilter, Storage};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::{
@@ -327,6 +327,101 @@ pub async fn alertmanager_webhook_handler(
     Json(json!({"status": "ok"}))
 }
 
+/// Query parameters for checks and events pagination
+#[derive(Deserialize)]
+pub struct PaginationParams {
+    limit: Option<i64>,
+    offset: Option<i64>,
+    entity_id: Option<String>,
+    entity_type: Option<String>,
+    protocol: Option<String>,
+    success: Option<bool>,
+    since: Option<String>,
+    until: Option<String>,
+    event_type: Option<String>,
+}
+
+/// Checks handler with pagination
+pub async fn checks_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<PaginationParams>,
+) -> Json<Value> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let offset = params.offset.unwrap_or(0).max(0);
+
+    let since = params.since.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+    let until = params.until.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+
+    let filter = CheckResultsFilter {
+        entity_id: params.entity_id,
+        entity_type: params.entity_type,
+        protocol: params.protocol,
+        success: params.success,
+        since,
+        until,
+        limit,
+        offset,
+    };
+
+    match get_check_results(&state.storage.pool, filter).await {
+        Ok(results) => Json(json!({
+            "checks": results,
+            "limit": limit,
+            "offset": offset,
+            "count": results.len()
+        })),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
+/// Events handler with pagination
+pub async fn events_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<PaginationParams>,
+) -> Json<Value> {
+    let limit = params.limit.unwrap_or(50).clamp(1, 1000);
+    let offset = params.offset.unwrap_or(0).max(0);
+
+    let since = params.since.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+    let until = params.until.and_then(|s| {
+        chrono::DateTime::parse_from_rfc3339(&s)
+            .ok()
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+    });
+
+    let filter = EventsFilter {
+        entity_id: params.entity_id,
+        entity_type: params.entity_type,
+        event_type: params.event_type,
+        since,
+        until,
+        limit,
+        offset,
+    };
+
+    match get_events(&state.storage.pool, filter).await {
+        Ok(events) => Json(json!({
+            "events": events,
+            "limit": limit,
+            "offset": offset,
+            "count": events.len()
+        })),
+        Err(e) => Json(json!({"error": e.to_string()})),
+    }
+}
+
 pub fn router(app_state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_handler))
@@ -334,7 +429,8 @@ pub fn router(app_state: AppState) -> Router {
         .route("/api/v1/vlans", get(empty_handler))
         .route("/api/v1/subnets", get(empty_handler))
         .route("/api/v1/gateways", get(empty_handler))
-        .route("/api/v1/events", get(empty_handler))
+        .route("/api/v1/events", get(events_handler))
+        .route("/api/v1/checks", get(checks_handler))
         .route("/api/v1/interfaces", get(interfaces_handler))
         .route("/api/v1/routes", get(routes_handler))
         .route("/api/v1/monitor/ping", post(ping_handler))
