@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::net::Ipv4Addr;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, Clone)]
 pub struct RouteEntry {
     pub destination: String,
     pub gateway: Option<String>,

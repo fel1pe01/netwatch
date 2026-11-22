@@ -1,11 +1,13 @@
 use netwatch::api::{router, AppState};
 use netwatch::auth::AuthState;
+use netwatch::config::Config;
 use netwatch::metrics::AppMetrics;
 use netwatch::rate_limit::{RateLimitConfig, RateLimiter};
 use netwatch::ssrf::{SsrfConfig, SsrfState};
 use netwatch::storage::Storage;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
@@ -22,7 +24,7 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
 
     let auth_state = Arc::new(AuthState::new(netwatch::auth::AuthConfig {
         enabled: false,
-        tokens: std::collections::HashMap::new(),
+        tokens: HashMap::new(),
         public_paths: vec!["/health".to_string(), "/metrics".to_string()],
         token_header: "Authorization".to_string(),
     }));
@@ -36,7 +38,8 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let ssrf_state = Arc::new(SsrfState::new(test_ssrf_config).unwrap());
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+    let config = Arc::new(Config::default());
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter, config);
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
@@ -85,17 +88,26 @@ async fn http_interfaces_endpoint() {
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
-    assert!(body["interfaces"].is_array());
-    let interfaces = body["interfaces"].as_array().unwrap();
-    assert!(
-        !interfaces.is_empty(),
-        "Should have at least loopback interface"
-    );
+    // New format: { items, total, limit, offset }
+    assert!(body["items"].is_array());
+    assert!(body["total"].is_number());
+    assert!(body["limit"].is_number());
+    assert!(body["offset"].is_number());
 
-    let iface = &interfaces[0];
-    assert!(iface["name"].is_string());
-    assert!(iface["ipv4"].is_string() || iface["ipv4"].is_null());
-    assert!(iface["evidence"].is_string());
+    let interfaces = body["items"].as_array().unwrap();
+    // Note: DB may be empty initially, so we don't assert non-empty
+    // but we verify the structure is correct
+
+    if !interfaces.is_empty() {
+        let iface = &interfaces[0];
+        assert!(iface["id"].is_string());
+        assert!(iface["device_id"].is_string());
+        assert!(iface["name"].is_string() || iface["name"].is_null());
+        assert!(iface["mac"].is_string() || iface["mac"].is_null());
+        assert!(iface["mtu"].is_number() || iface["mtu"].is_null());
+        assert!(iface["state"].is_string() || iface["state"].is_null());
+        assert!(iface["created_at"].is_string());
+    }
 }
 
 #[tokio::test]
@@ -111,14 +123,56 @@ async fn http_routes_endpoint() {
     assert_eq!(resp.status(), 200);
 
     let body: Value = resp.json().await.unwrap();
-    assert!(body["routes"].is_array());
-    let routes = body["routes"].as_array().unwrap();
-    assert!(!routes.is_empty(), "Should have at least default route");
+    // New format: { items, total, limit, offset }
+    assert!(body["items"].is_array());
+    assert!(body["total"].is_number());
+    assert!(body["limit"].is_number());
+    assert!(body["offset"].is_number());
 
-    let route = &routes[0];
-    assert!(route["destination"].is_string());
-    assert!(route["interface"].is_string());
-    assert!(route["evidence"].is_string());
+    let routes = body["items"].as_array().unwrap();
+    // Note: DB may be empty initially
+
+    if !routes.is_empty() {
+        let route = &routes[0];
+        assert!(route["id"].is_string());
+        assert!(route["destination"].is_string());
+        assert!(route["gateway"].is_string() || route["gateway"].is_null());
+        assert!(route["interface"].is_string());
+        assert!(route["metric"].is_number() || route["metric"].is_null());
+        assert!(route["family"].is_string());
+        assert!(route["created_at"].is_string());
+    }
+}
+
+#[tokio::test]
+async fn http_hosts_endpoint() {
+    let (base_url, _handle) = spawn_test_server().await;
+    let client = Client::new();
+
+    let resp = client
+        .get(format!("{}/api/v1/hosts", base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let body: Value = resp.json().await.unwrap();
+    // New format: { items, total, limit, offset }
+    assert!(body["items"].is_array());
+    assert!(body["total"].is_number());
+    assert!(body["limit"].is_number());
+    assert!(body["offset"].is_number());
+
+    let hosts = body["items"].as_array().unwrap();
+    // Should have at least the local device
+    assert!(!hosts.is_empty(), "Should have at least local device");
+
+    let host = &hosts[0];
+    assert!(host["id"].is_string());
+    assert!(host["hostname"].is_string() || host["hostname"].is_null());
+    assert!(host["ip"].is_string() || host["ip"].is_null());
+    assert!(host["device_type"].is_string() || host["device_type"].is_null());
+    assert!(host["created_at"].is_string());
 }
 
 #[tokio::test]
@@ -305,7 +359,7 @@ async fn http_placeholder_endpoints() {
         assert_eq!(body.as_array().unwrap().len(), 0);
     }
 
-    // Events endpoint returns paginated response object
+    // Events endpoint returns paginated response object with items array
     let resp = client
         .get(format!("{}/api/v1/events", base_url))
         .send()
@@ -313,12 +367,12 @@ async fn http_placeholder_endpoints() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body.get("events").is_some());
-    assert!(body["events"].is_array());
-    assert_eq!(body["events"].as_array().unwrap().len(), 0);
+    assert!(body.get("items").is_some());
+    assert!(body["items"].is_array());
+    assert_eq!(body["items"].as_array().unwrap().len(), 0);
     assert!(body.get("limit").is_some());
     assert!(body.get("offset").is_some());
-    assert!(body.get("count").is_some());
+    assert!(body.get("total").is_some());
 }
 
 #[tokio::test]

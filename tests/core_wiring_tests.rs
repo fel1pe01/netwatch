@@ -48,7 +48,8 @@ async fn spawn_default_config_server(
     let ssrf_state = Arc::new(SsrfState::new(SsrfConfigStruct::default()).unwrap());
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+    let config = Arc::new(Config::default());
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter, config);
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
@@ -99,7 +100,8 @@ async fn spawn_relaxed_config_server(
     let ssrf_state = Arc::new(SsrfState::new(ssrf_config).unwrap());
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+    let config = Arc::new(Config::default());
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter, config);
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
@@ -165,6 +167,7 @@ fn create_test_config_with_checks() -> Config {
         consecutive_successes_threshold: Some(1),
         check_results_retention_days: Some(1),
         events_retention_days: Some(1),
+        inventory_retention_days: Some(1),
         retention_prune_interval: Some(1),
     };
     config.ssrf = netwatch::ssrf::SsrfConfig {
@@ -413,9 +416,9 @@ async fn test_writer_actor_persists_check_results_and_events() {
     )
     .await
     .unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].entity_id, "entity-1");
-    assert!(results[0].success);
+    assert_eq!(results.items.len(), 1);
+    assert_eq!(results.items[0].entity_id, "entity-1");
+    assert!(results.items[0].success);
 
     // Verify event persisted
     let events = get_events(
@@ -428,9 +431,9 @@ async fn test_writer_actor_persists_check_results_and_events() {
     )
     .await
     .unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].entity_id, "entity-1");
-    assert_eq!(events[0].event_type, "check_completed");
+    assert_eq!(events.items.len(), 1);
+    assert_eq!(events.items[0].entity_id, "entity-1");
+    assert_eq!(events.items[0].event_type, "check_completed");
 }
 
 #[tokio::test]
@@ -563,7 +566,7 @@ async fn test_retention_pruning_removes_old_rows_only() {
     )
     .await
     .unwrap();
-    assert_eq!(results.len(), 3);
+    assert_eq!(results.items.len(), 3);
 
     let events = get_events(
         &storage.pool,
@@ -575,7 +578,7 @@ async fn test_retention_pruning_removes_old_rows_only() {
     )
     .await
     .unwrap();
-    assert_eq!(events.len(), 2);
+    assert_eq!(events.items.len(), 2);
 }
 
 #[tokio::test]
@@ -720,9 +723,9 @@ async fn test_scheduler_executes_checks_persists_results() {
     .unwrap();
 
     // Should have results for both checks
-    assert!(!results.is_empty());
+    assert!(!results.items.is_empty());
     // Each check should have run multiple times
-    let check_ids: Vec<String> = results.iter().map(|r| r.entity_id.clone()).collect();
+    let check_ids: Vec<String> = results.items.iter().map(|r| r.entity_id.clone()).collect();
     assert!(check_ids.contains(&"test-tcp-local".to_string()));
     assert!(check_ids.contains(&"test-tcp-success".to_string()));
 }
@@ -774,7 +777,10 @@ async fn test_api_reads_checks_paginated() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["checks"].as_array().unwrap().len(), 5);
+    assert_eq!(body["items"].as_array().unwrap().len(), 5);
+    assert_eq!(body["total"], 15);
+    assert_eq!(body["limit"], 5);
+    assert_eq!(body["offset"], 0);
 
     // Test pagination - second page
     let resp = client
@@ -785,19 +791,24 @@ async fn test_api_reads_checks_paginated() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["checks"].as_array().unwrap().len(), 5);
+    assert_eq!(body["items"].as_array().unwrap().len(), 5);
+    assert_eq!(body["total"], 15);
+    assert_eq!(body["limit"], 5);
+    assert_eq!(body["offset"], 5);
 
-    // Test limit beyond max
+    // Test limit beyond max -> 400
     let resp = client
         .get(format!("{}/api/v1/checks?limit=1000&offset=0", base_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    // Should be capped at reasonable max
-    assert!(body["checks"].as_array().unwrap().len() <= 100);
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("limit must be between 1 and 500"));
 }
 
 #[tokio::test]
@@ -849,7 +860,10 @@ async fn test_api_reads_events_paginated() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["events"].as_array().unwrap().len(), 5);
+    assert_eq!(body["items"].as_array().unwrap().len(), 5);
+    assert_eq!(body["total"], 15);
+    assert_eq!(body["limit"], 5);
+    assert_eq!(body["offset"], 0);
 }
 
 #[tokio::test]
@@ -901,36 +915,45 @@ async fn test_api_negative_cases() {
         .unwrap();
     assert_eq!(resp.status(), 401);
 
-    // Invalid limit -> clamped to 1 (with valid token)
+    // Invalid limit -> 400 with JSON error
     let resp = client
         .get(format!("{}/api/v1/checks?limit=-1&offset=0", base_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200); // Clamped to valid range
+    assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["limit"], 1); // Clamped to minimum
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("limit must be between 1 and 500"));
 
-    // Invalid offset -> clamped to 0 (with valid token)
+    // Invalid offset -> 400 with JSON error
     let resp = client
         .get(format!("{}/api/v1/checks?limit=10&offset=-1", base_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200); // Clamped to valid range
+    assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["offset"], 0); // Clamped to minimum
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("offset must be non-negative"));
 
-    // Invalid limit (too high) -> clamped to 1000
+    // Invalid limit (too high) -> 400 with JSON error
     let resp = client
         .get(format!("{}/api/v1/checks?limit=10000&offset=0", base_url))
         .header("Authorization", format!("Bearer {}", token))
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 200); // Clamped to valid range
+    assert_eq!(resp.status(), 400);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["limit"], 1000); // Clamped to maximum
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("limit must be between 1 and 500"));
 }

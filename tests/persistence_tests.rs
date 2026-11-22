@@ -5,7 +5,7 @@ use netwatch::storage::{
     get_check_results, get_events, load_last_check_state, prune_old_data, CheckResultMessage,
     CheckResultWriter, CheckResultsFilter, EventsFilter, Storage,
 };
-use sqlx::Row;
+use sqlx::{sqlite::SqlitePoolOptions, Row};
 use std::time::Duration;
 use tempfile::tempdir;
 use tokio::time::sleep;
@@ -97,10 +97,14 @@ async fn test_check_results_and_events_survive_restart() {
     )
     .await
     .unwrap();
-    assert_eq!(results.len(), 10, "check_results should survive restart");
+    assert_eq!(
+        results.items.len(),
+        10,
+        "check_results should survive restart"
+    );
 
     // Verify data integrity
-    for (i, cr) in results.iter().enumerate() {
+    for (i, cr) in results.items.iter().enumerate() {
         let expected_success = (9 - i) % 2 == 0; // reversed order due to DESC
         assert_eq!(
             cr.success, expected_success,
@@ -122,10 +126,10 @@ async fn test_check_results_and_events_survive_restart() {
     )
     .await
     .unwrap();
-    assert_eq!(events.len(), 5, "events_v2 should survive restart");
+    assert_eq!(events.items.len(), 5, "events_v2 should survive restart");
 
     // Verify event data integrity
-    for (i, ev) in events.iter().enumerate() {
+    for (i, ev) in events.items.iter().enumerate() {
         let expected_type = if (4 - i) % 2 == 0 {
             "check_completed"
         } else {
@@ -288,8 +292,12 @@ async fn test_migrations_on_existing_database() {
     )
     .await
     .unwrap();
-    assert_eq!(old_checks.len(), 1, "existing check_results should survive");
-    assert_eq!(old_checks[0].entity_id, "test-device-1");
+    assert_eq!(
+        old_checks.items.len(),
+        1,
+        "existing check_results should survive"
+    );
+    assert_eq!(old_checks.items[0].entity_id, "test-device-1");
 
     let old_events = get_events(
         &storage2.pool,
@@ -301,8 +309,12 @@ async fn test_migrations_on_existing_database() {
     )
     .await
     .unwrap();
-    assert_eq!(old_events.len(), 1, "existing events_v2 should survive");
-    assert_eq!(old_events[0].entity_id, "test-device-1");
+    assert_eq!(
+        old_events.items.len(),
+        1,
+        "existing events_v2 should survive"
+    );
+    assert_eq!(old_events.items[0].entity_id, "test-device-1");
 
     // Verify new writes still work after upgrade
     let (writer, tx) = CheckResultWriter::new(storage2.pool.clone(), 100);
@@ -340,7 +352,11 @@ async fn test_migrations_on_existing_database() {
     )
     .await
     .unwrap();
-    assert_eq!(checks.len(), 2, "new writes should work after upgrade");
+    assert_eq!(
+        checks.items.len(),
+        2,
+        "new writes should work after upgrade"
+    );
 }
 
 /// Test that load_last_check_state works correctly after restart
@@ -564,8 +580,12 @@ async fn test_pruning_preserves_recent_data() {
     )
     .await
     .unwrap();
-    assert_eq!(results.len(), 3, "recent check_results should survive");
-    assert!(results.iter().all(|r| r.entity_id == "entity-new"));
+    assert_eq!(
+        results.items.len(),
+        3,
+        "recent check_results should survive"
+    );
+    assert!(results.items.iter().all(|r| r.entity_id == "entity-new"));
 
     let events = get_events(
         &storage.pool,
@@ -577,6 +597,445 @@ async fn test_pruning_preserves_recent_data() {
     )
     .await
     .unwrap();
-    assert_eq!(events.len(), 2, "recent events_v2 should survive");
-    assert!(events.iter().all(|e| e.entity_id == "entity-new"));
+    assert_eq!(events.items.len(), 2, "recent events_v2 should survive");
+    assert!(events.items.iter().all(|e| e.entity_id == "entity-new"));
+}
+
+/// Test that migration deduplicates devices with duplicate IPs before creating unique indexes
+/// Simulates an "old" database with devices having duplicate IPs and children hanging from both.
+/// After migration: DB starts, PRAGMA foreign_key_check empty, unique indexes present, child data preserved.
+#[tokio::test]
+async fn test_migration_deduplicates_duplicate_ips() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("dedup_test.sqlite");
+
+    // Step 1: Create a database with ONLY the initial migration applied
+    // We do this by creating a custom migrator with just the initial migration file
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(db_path.to_str().unwrap())
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .foreign_keys(true)
+            .busy_timeout(std::time::Duration::from_millis(5000));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        // Create a migrator that only includes the initial migration
+        let temp_migrations_dir = tempdir().unwrap();
+        let initial_migration_src = std::path::Path::new("./migrations/20231006000000_initial.sql");
+        let initial_migration_dst = temp_migrations_dir
+            .path()
+            .join("20231006000000_initial.sql");
+        std::fs::copy(initial_migration_src, &initial_migration_dst).unwrap();
+
+        let initial_migrator = sqlx::migrate::Migrator::new(temp_migrations_dir.path())
+            .await
+            .unwrap();
+        initial_migrator.run(&pool).await.unwrap();
+
+        pool.close().await;
+    }
+
+    // Step 2: Insert duplicate data into the database (after initial migration, before dedup migration)
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(db_path.to_str().unwrap())
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .foreign_keys(true)
+            .busy_timeout(std::time::Duration::from_millis(5000));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+
+        // Insert duplicate devices with children (using the schema from initial migration)
+        let now = Utc::now().to_rfc3339();
+        let now_minus_1 = (Utc::now() - chrono::Duration::hours(1)).to_rfc3339();
+        let now_minus_2 = (Utc::now() - chrono::Duration::hours(2)).to_rfc3339();
+
+        // Device 1 (keeper - most recent updated_at)
+        sqlx::query(
+            r#"
+            INSERT INTO devices (id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("device-keeper")
+        .bind("router-1")
+        .bind("192.168.1.1")
+        .bind("aa:bb:cc:dd:ee:ff")
+        .bind("router")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now)
+        .bind(&now_minus_2)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Device 2 (duplicate - older updated_at)
+        sqlx::query(
+            r#"
+            INSERT INTO devices (id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("device-duplicate")
+        .bind("router-1-dup")
+        .bind("192.168.1.1")
+        .bind("aa:bb:cc:dd:ee:00")
+        .bind("router")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now_minus_1)
+        .bind(&now_minus_2)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert interfaces for BOTH devices (will have collision on device_id+name after dedup)
+        sqlx::query(
+            r#"
+            INSERT INTO interfaces (id, device_id, name, mac, mtu, state, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("iface-keeper-eth0")
+        .bind("device-keeper")
+        .bind("eth0")
+        .bind("aa:bb:cc:dd:ee:ff")
+        .bind(1500)
+        .bind("up")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now)
+        .bind(&now_minus_2)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO interfaces (id, device_id, name, mac, mtu, state, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("iface-dup-eth0")
+        .bind("device-duplicate")
+        .bind("eth0")  // SAME name - will collide after dedup
+        .bind("aa:bb:cc:dd:ee:00")
+        .bind(1500)
+        .bind("up")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now_minus_1)
+        .bind(&now_minus_2)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert another interface for duplicate device (unique name)
+        sqlx::query(
+            r#"
+            INSERT INTO interfaces (id, device_id, name, mac, mtu, state, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("iface-dup-eth1")
+        .bind("device-duplicate")
+        .bind("eth1")
+        .bind("aa:bb:cc:dd:ee:01")
+        .bind(1500)
+        .bind("up")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now_minus_1)
+        .bind(&now_minus_2)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert services for BOTH devices (will have collision on device_id+port+protocol after dedup)
+        sqlx::query(
+            r#"
+            INSERT INTO services (id, device_id, port, protocol, name, status, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("svc-keeper-80")
+        .bind("device-keeper")
+        .bind(80)
+        .bind("tcp")
+        .bind("http")
+        .bind("open")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now)
+        .bind(&now_minus_2)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO services (id, device_id, port, protocol, name, status, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("svc-dup-80")
+        .bind("device-duplicate")
+        .bind(80)  // SAME port+protocol - will collide after dedup
+        .bind("tcp")
+        .bind("http")
+        .bind("open")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now_minus_1)
+        .bind(&now_minus_2)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert another service for duplicate device (unique port)
+        sqlx::query(
+            r#"
+            INSERT INTO services (id, device_id, port, protocol, name, status, source, confidence, observed_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("svc-dup-443")
+        .bind("device-duplicate")
+        .bind(443)
+        .bind("tcp")
+        .bind("https")
+        .bind("open")
+        .bind("discovery")
+        .bind("high")
+        .bind(&now_minus_1)
+        .bind(&now_minus_2)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert events for both devices
+        sqlx::query(
+            r#"
+            INSERT INTO events (id, device_id, event_type, severity, timestamp, message, metadata, evidence, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("evt-keeper")
+        .bind("device-keeper")
+        .bind("check_completed")
+        .bind("info")
+        .bind(&now)
+        .bind("check ok")
+        .bind("{}")
+        .bind("{}")
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO events (id, device_id, event_type, severity, timestamp, message, metadata, evidence, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("evt-dup")
+        .bind("device-duplicate")
+        .bind("check_completed")
+        .bind("info")
+        .bind(&now_minus_1)
+        .bind("check ok")
+        .bind("{}")
+        .bind("{}")
+        .bind(&now_minus_1)
+        .bind(&now_minus_1)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Note: topology_nodes, topology_edges, observations, check_results, events_v2, incidents
+        // tables don't exist yet in the initial migration schema.
+        // They will be created by subsequent migrations.
+        // We'll insert data for them AFTER those migrations run, but we need to test that
+        // the dedup migration correctly handles data in those tables too.
+        // For now, let's test the core tables that exist in initial migration.
+
+        pool.close().await;
+    }
+
+    // Step 3: Now run the FULL migration suite (which includes our merged dedup+indexes migration)
+    // This should deduplicate the devices and create unique indexes
+    let storage = Storage::connect(db_path.to_str().unwrap()).await.unwrap();
+
+    // Verify the database started successfully (no unique constraint violation)
+    // Check that only ONE device with IP 192.168.1.1 exists (the keeper)
+    let device_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE ip = '192.168.1.1'")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        device_count, 1,
+        "should have exactly one device per IP after dedup"
+    );
+
+    // Verify the keeper device is the one with most recent updated_at
+    let keeper = sqlx::query("SELECT id, hostname FROM devices WHERE ip = '192.168.1.1'")
+        .fetch_one(&storage.pool)
+        .await
+        .unwrap();
+    assert_eq!(keeper.get::<String, _>("id"), "device-keeper");
+    assert_eq!(keeper.get::<String, _>("hostname"), "router-1");
+
+    // Verify unique indexes exist
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type='index' AND sql LIKE '%UNIQUE%' ORDER BY name",
+    )
+    .fetch_all(&storage.pool)
+    .await
+    .unwrap();
+    assert!(
+        indexes.contains(&"idx_devices_ip".to_string()),
+        "idx_devices_ip unique index should exist"
+    );
+    assert!(
+        indexes.contains(&"idx_interfaces_device_name".to_string()),
+        "idx_interfaces_device_name unique index should exist"
+    );
+    assert!(
+        indexes.contains(&"idx_services_device_port_proto".to_string()),
+        "idx_services_device_port_proto unique index should exist"
+    );
+    assert!(
+        indexes.contains(&"idx_routes_dest_iface_gw_metric".to_string()),
+        "idx_routes_dest_iface_gw_metric unique index should exist"
+    );
+
+    // Verify PRAGMA foreign_key_check is empty (no FK violations)
+    let fk_check: Vec<sqlx::sqlite::SqliteRow> = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(&storage.pool)
+        .await
+        .unwrap();
+    assert!(
+        fk_check.is_empty(),
+        "foreign_key_check should be empty, got {} rows",
+        fk_check.len()
+    );
+
+    // Verify child data was preserved and reassigned to keeper
+    // Interfaces: should have 2 (keeper's eth0 + duplicate's eth1, but duplicate's eth0 collides and should be deduped)
+    let iface_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM interfaces WHERE device_id = 'device-keeper'")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        iface_count, 2,
+        "should have 2 interfaces for keeper (eth0 from keeper, eth1 from duplicate)"
+    );
+
+    let iface_names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM interfaces WHERE device_id = 'device-keeper' ORDER BY name",
+    )
+    .fetch_all(&storage.pool)
+    .await
+    .unwrap();
+    assert!(
+        iface_names.contains(&"eth0".to_string()),
+        "should have eth0"
+    );
+    assert!(
+        iface_names.contains(&"eth1".to_string()),
+        "should have eth1"
+    );
+
+    // Services: should have 2 (keeper's 80/tcp + duplicate's 443/tcp, but duplicate's 80/tcp collides and should be deduped)
+    let svc_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE device_id = 'device-keeper'")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        svc_count, 2,
+        "should have 2 services for keeper (80/tcp from keeper, 443/tcp from duplicate)"
+    );
+
+    let svc_ports: Vec<i64> = sqlx::query_scalar(
+        "SELECT port FROM services WHERE device_id = 'device-keeper' ORDER BY port",
+    )
+    .fetch_all(&storage.pool)
+    .await
+    .unwrap();
+    assert_eq!(svc_ports, vec![80, 443], "should have ports 80 and 443");
+
+    // Verify events were reassigned
+    let evt_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE device_id = 'device-keeper'")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        evt_count, 2,
+        "should have 2 events for keeper (from both original devices)"
+    );
+
+    // Verify routes table exists
+    let routes_table: Option<String> =
+        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name='routes'")
+            .fetch_optional(&storage.pool)
+            .await
+            .unwrap();
+    assert!(routes_table.is_some(), "routes table should exist");
+
+    // Verify last_seen columns exist
+    let has_last_seen_devices: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('devices') WHERE name='last_seen'",
+    )
+    .fetch_one(&storage.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        has_last_seen_devices, 1,
+        "devices.last_seen column should exist"
+    );
+
+    let has_last_seen_interfaces: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('interfaces') WHERE name='last_seen'",
+    )
+    .fetch_one(&storage.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        has_last_seen_interfaces, 1,
+        "interfaces.last_seen column should exist"
+    );
+
+    let has_last_seen_routes: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('routes') WHERE name='last_seen'",
+    )
+    .fetch_one(&storage.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        has_last_seen_routes, 1,
+        "routes.last_seen column should exist"
+    );
 }

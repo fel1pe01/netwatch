@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs::read_to_string;
 use std::io;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct LocalInterface {
     pub name: String,
     pub oper_state: Option<String>,

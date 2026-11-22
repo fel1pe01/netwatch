@@ -1,4 +1,5 @@
 use crate::config::{Config, SyntheticCheckType};
+use crate::discovery::source::{DiscoverySource, SystemDiscoverySource};
 use crate::events::{CheckEvidence, EntityType, EventBus};
 use crate::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
@@ -11,9 +12,13 @@ use crate::monitoring::HttpPhaseTimings;
 use crate::scheduler::{Job, Scheduler};
 use crate::ssrf::SsrfPolicy;
 use crate::state_tracker::{StateTracker, StateTrackerConfig};
-use crate::storage::{load_last_check_state, CheckResult, CheckResultMessage, Storage};
+use crate::storage::{
+    load_last_check_state, CheckResult, CheckResultMessage, Storage, UpsertInterfaceMessage,
+    UpsertRouteMessage,
+};
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
+use futures::future::BoxFuture;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -403,6 +408,217 @@ pub async fn register_monitoring_jobs(
         };
         scheduler.add_job(job);
     }
+
+    // Register discovery persistence job (runs on startup and then periodically)
+    if config.discovery.enabled && config.discovery.interval > 0 {
+        let interval = Duration::from_secs(config.discovery.interval);
+        let storage = storage.clone();
+        let check_result_tx = check_result_tx.clone();
+        let discovery_source = Arc::new(SystemDiscoverySource);
+
+        let task = create_discovery_persist_task(storage, check_result_tx, discovery_source);
+
+        let job = Job {
+            name: "discovery_persist".to_string(),
+            interval,
+            task,
+        };
+        scheduler.add_job(job);
+    }
+
+    Ok(())
+}
+
+// Discovery persist task struct
+struct DiscoveryPersistTask {
+    storage: Arc<Storage>,
+    check_result_tx: mpsc::Sender<CheckResultMessage>,
+    discovery_source: Arc<dyn DiscoverySource>,
+}
+
+impl DiscoveryPersistTask {
+    fn run(&self) -> BoxFuture<'static, Result<()>> {
+        let storage = self.storage.clone();
+        let check_result_tx = self.check_result_tx.clone();
+        let discovery_source = self.discovery_source.clone();
+        let now = Utc::now();
+        Box::pin(async move {
+            // Run discovery in spawn_blocking (blocking I/O)
+            let interfaces_result = tokio::task::spawn_blocking({
+                let discovery_source = discovery_source.clone();
+                move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(discovery_source.discover_interfaces())
+                }
+            })
+            .await;
+
+            let routes_result = tokio::task::spawn_blocking({
+                let discovery_source = discovery_source.clone();
+                move || {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(discovery_source.discover_routes())
+                }
+            })
+            .await;
+
+            let now = now;
+            let now_str = now.to_rfc3339();
+
+            match interfaces_result {
+                Ok(Ok(interfaces)) => {
+                    for iface in interfaces {
+                        let device_id = iface.ipv4.clone().unwrap_or_else(|| iface.name.clone());
+                        let device_type =
+                            if iface.name.starts_with("veth") || iface.name.starts_with("docker") {
+                                "virtual"
+                            } else if iface.name == "lo" {
+                                "loopback"
+                            } else {
+                                "physical"
+                            };
+
+                        if let Err(e) = upsert_device(
+                            &storage,
+                            &device_id,
+                            &iface.name,
+                            &iface.ipv4,
+                            &iface.ipv6,
+                            &iface.mac,
+                            device_type,
+                            &now,
+                        )
+                        .await
+                        {
+                            tracing::error!("Failed to upsert device {}: {}", device_id, e);
+                        }
+
+                        // Send interface upsert through writer actor
+                        let interface_msg = UpsertInterfaceMessage {
+                            id: iface.name.clone(),
+                            device_id: device_id.clone(),
+                            name: iface.name.clone(),
+                            mac: iface.mac.clone(),
+                            mtu: iface.mtu.map(|v| v as i64),
+                            state: iface.oper_state.clone(),
+                            source: "discovery".to_string(),
+                            confidence: "high".to_string(),
+                            observed_at: iface.oper_state.clone(),
+                            created_at: now_str.clone(),
+                            updated_at: now_str.clone(),
+                            last_seen: now_str.clone(),
+                        };
+                        if let Err(e) = check_result_tx
+                            .send(CheckResultMessage::UpsertInterface(interface_msg))
+                            .await
+                        {
+                            tracing::error!("Failed to send interface upsert: {}", e);
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Interface discovery failed: {}", e);
+                }
+                Err(e) => {
+                    tracing::error!("Interface discovery task failed: {}", e);
+                }
+            }
+
+            match routes_result {
+                Ok(Ok(routes)) => {
+                    for route in routes {
+                        // Send route upsert through writer actor
+                        let route_msg = UpsertRouteMessage {
+                            id: format!("{}|{}", route.destination, route.interface),
+                            destination: route.destination.clone(),
+                            gateway: route.gateway.clone(),
+                            interface: route.interface.clone(),
+                            metric: route.metric.map(|v| v as i64),
+                            mask: route.mask.clone(),
+                            family: "ipv4".to_string(),
+                            last_seen: now_str.clone(),
+                            created_at: now_str.clone(),
+                            updated_at: now_str.clone(),
+                        };
+                        if let Err(e) = check_result_tx
+                            .send(CheckResultMessage::UpsertRoute(route_msg))
+                            .await
+                        {
+                            tracing::error!("Failed to send route upsert: {}", e);
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("Route discovery failed: {}", e);
+                }
+                Err(e) => {
+                    tracing::error!("Route discovery task failed: {}", e);
+                }
+            }
+
+            Ok(())
+        })
+    }
+}
+
+/// Create the discovery persist task
+pub fn create_discovery_persist_task(
+    storage: Arc<Storage>,
+    check_result_tx: mpsc::Sender<CheckResultMessage>,
+    discovery_source: Arc<dyn DiscoverySource>,
+) -> Arc<dyn Fn() -> BoxFuture<'static, Result<()>> + Send + Sync> {
+    let task = DiscoveryPersistTask {
+        storage,
+        check_result_tx,
+        discovery_source,
+    };
+    Arc::new(move || task.run())
+}
+/// Upsert device with last_seen
+#[allow(clippy::too_many_arguments, unused_variables)]
+async fn upsert_device(
+    storage: &Storage,
+    device_id: &str,
+    hostname: &str,
+    ipv4: &Option<String>,
+    _ipv6: &Option<String>,
+    mac: &Option<String>,
+    device_type: &str,
+    now: &DateTime<Utc>,
+) -> Result<()> {
+    let ip = ipv4.as_deref().unwrap_or("");
+    let mac = mac.as_deref().unwrap_or("");
+    let now_str = now.to_rfc3339();
+
+    sqlx::query(
+        r#"
+        INSERT INTO devices (id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            hostname = excluded.hostname,
+            ip = excluded.ip,
+            mac = excluded.mac,
+            device_type = excluded.device_type,
+            source = excluded.source,
+            confidence = excluded.confidence,
+            observed_at = excluded.observed_at,
+            updated_at = excluded.updated_at,
+            last_seen = excluded.last_seen
+        "#,
+    )
+    .bind(device_id)
+    .bind(hostname)
+    .bind(ip)
+    .bind(mac)
+    .bind(device_type)
+    .bind("discovery")
+    .bind("high")
+    .bind(&now_str)
+    .bind(&now_str)
+    .bind(&now_str)
+    .bind(&now_str)
+    .execute(&storage.pool)
+    .await?;
 
     Ok(())
 }
