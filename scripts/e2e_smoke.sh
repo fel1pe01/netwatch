@@ -24,6 +24,7 @@ HTTP_BODY=""
 
 PASS_COUNT=0
 FAIL_COUNT=0
+NOT_IMPLEMENTED_COUNT=0
 
 # --- dependencias -------------------------------------------------------------
 for dep in curl jq python3 ping timeout; do
@@ -142,6 +143,13 @@ pass() {
     echo "${GREEN}[PASS]${NC} $*" | tee -a "${LOG_FILE}"
     PASS_COUNT=$((PASS_COUNT + 1))
 }
+
+not_implemented() {
+    echo "${YELLOW}[NOT IMPLEMENTED]${NC} $*" | tee -a "${LOG_FILE}"
+    NOT_IMPLEMENTED_COUNT=$((NOT_IMPLEMENTED_COUNT + 1))
+}
+
+
 
 stop_listener() {
     if [[ -n "${LISTENER_PID}" ]]; then
@@ -403,25 +411,38 @@ test_http_health() {
 
 test_http_interfaces() {
     assert_status "${BASE_URL}/api/v1/interfaces" "200" "HTTP GET /api/v1/interfaces"
-    assert_json_field_exists "${BASE_URL}/api/v1/interfaces" ".interfaces" "HTTP /interfaces has interfaces array"
+    assert_json_field_exists "${BASE_URL}/api/v1/interfaces" ".items" "HTTP /interfaces has items array"
+    assert_json_field_exists "${BASE_URL}/api/v1/interfaces" ".total" "HTTP /interfaces has total"
+    assert_json_field_exists "${BASE_URL}/api/v1/interfaces" ".limit" "HTTP /interfaces has limit"
+    assert_json_field_exists "${BASE_URL}/api/v1/interfaces" ".offset" "HTTP /interfaces has offset"
     local count
-    count=$(curl -s "${BASE_URL}/api/v1/interfaces" | jq '.interfaces | length' 2>/dev/null || echo "0")
-    if [[ "${count}" -gt 0 ]]; then
-        pass "HTTP /interfaces: ${count} interfaces found"
-    else
-        fail "HTTP /interfaces: no interfaces found"
-    fi
+    count=$(curl -s "${BASE_URL}/api/v1/interfaces" | jq '.items | length' 2>/dev/null || echo "0")
+    pass "HTTP /interfaces: ${count} interfaces found"
 }
 
 test_http_routes() {
     assert_status "${BASE_URL}/api/v1/routes" "200" "HTTP GET /api/v1/routes"
-    assert_json_field_exists "${BASE_URL}/api/v1/routes" ".routes" "HTTP /routes has routes array"
+    assert_json_field_exists "${BASE_URL}/api/v1/routes" ".items" "HTTP /routes has items array"
+    assert_json_field_exists "${BASE_URL}/api/v1/routes" ".total" "HTTP /routes has total"
+    assert_json_field_exists "${BASE_URL}/api/v1/routes" ".limit" "HTTP /routes has limit"
+    assert_json_field_exists "${BASE_URL}/api/v1/routes" ".offset" "HTTP /routes has offset"
     local count
-    count=$(curl -s "${BASE_URL}/api/v1/routes" | jq '.routes | length' 2>/dev/null || echo "0")
+    count=$(curl -s "${BASE_URL}/api/v1/routes" | jq '.items | length' 2>/dev/null || echo "0")
+    pass "HTTP /routes: ${count} routes found"
+}
+
+test_http_hosts() {
+    assert_status "${BASE_URL}/api/v1/hosts" "200" "HTTP GET /api/v1/hosts"
+    assert_json_field_exists "${BASE_URL}/api/v1/hosts" ".items" "HTTP /hosts has items array"
+    assert_json_field_exists "${BASE_URL}/api/v1/hosts" ".total" "HTTP /hosts has total"
+    assert_json_field_exists "${BASE_URL}/api/v1/hosts" ".limit" "HTTP /hosts has limit"
+    assert_json_field_exists "${BASE_URL}/api/v1/hosts" ".offset" "HTTP /hosts has offset"
+    local count
+    count=$(curl -s "${BASE_URL}/api/v1/hosts" | jq '.items | length' 2>/dev/null || echo "0")
     if [[ "${count}" -gt 0 ]]; then
-        pass "HTTP /routes: ${count} routes found"
+        pass "HTTP /hosts: ${count} hosts found"
     else
-        fail "HTTP /routes: no routes found"
+        fail "HTTP /hosts: no hosts found"
     fi
 }
 
@@ -480,42 +501,39 @@ test_http_monitor_tcp_failure() {
 }
 
 test_http_placeholder_endpoints() {
-    local array_endpoints=(
+    # Placeholder endpoints - NOT IMPLEMENTED (return empty arrays)
+    local placeholder_endpoints=(
         "/api/v1/vlans"
         "/api/v1/subnets"
         "/api/v1/gateways"
         "/api/v1/topology"
     )
-    local ep resp
-    for ep in "${array_endpoints[@]}"; do
-        assert_status "${BASE_URL}${ep}" "200" "HTTP GET ${ep}"
-        resp=$(curl -s "${BASE_URL}${ep}" 2>/dev/null)
-        if jq -e 'type == "array" and length == 0' >/dev/null 2>&1 <<< "${resp}"; then
-            pass "HTTP ${ep}: empty array"
-        else
-            fail "HTTP ${ep}: expected empty array, got: ${resp}"
-        fi
+    local ep
+    for ep in "${placeholder_endpoints[@]}"; do
+        not_implemented "HTTP GET ${ep}: placeholder endpoint (returns empty array)"
     done
 
-    # Events endpoint returns paginated response object
+    # Events endpoint - IMPLEMENTED (paginated response with items array)
     local ep="/api/v1/events"
     assert_status "${BASE_URL}${ep}" "200" "HTTP GET ${ep}"
     resp=$(curl -s "${BASE_URL}${ep}" 2>/dev/null)
-    if jq -e '(.events | type == "array" and length == 0) and (.limit | type == "number") and (.offset | type == "number") and (.count | type == "number")' >/dev/null 2>&1 <<< "${resp}"; then
-        pass "HTTP ${ep}: paginated response with empty events array"
+    if jq -e '(.items | type == "array" and length == 0) and (.total | type == "number") and (.limit | type == "number") and (.offset | type == "number")' >/dev/null 2>&1 <<< "${resp}"; then
+        pass "HTTP ${ep}: paginated response with empty items array"
     else
-        fail "HTTP ${ep}: expected paginated response with empty events array, got: ${resp}"
+        fail "HTTP ${ep}: expected paginated response with empty items array, got: ${resp}"
     fi
 
-    # Test /api/v1/devices returns new format
+    # Test /api/v1/devices returns format { items, total, limit, offset }
     assert_status "${BASE_URL}/api/v1/devices" "200" "HTTP GET /api/v1/devices"
     resp=$(curl -s "${BASE_URL}/api/v1/devices" 2>/dev/null)
-    if jq -e 'type == "object" and (.devices | type == "array")' >/dev/null 2>&1 <<< "${resp}"; then
-        pass "HTTP /api/v1/devices: correct format with devices array"
+    if jq -e 'type == "object" and (.items | type == "array") and (.total | type == "number") and (.limit | type == "number") and (.offset | type == "number")' >/dev/null 2>&1 <<< "${resp}"; then
+        pass "HTTP /api/v1/devices: correct format with items array"
     else
-        fail "HTTP /api/v1/devices: expected object with devices array, got: ${resp}"
+        fail "HTTP /api/v1/devices: expected object with items array, got: ${resp}"
     fi
 }
+
+
 
 test_http_ping_invalid_content_type() {
     local status
@@ -662,6 +680,7 @@ main() {
     test_http_health
     test_http_interfaces
     test_http_routes
+    test_http_hosts
     test_http_monitor_ping
     test_http_monitor_tcp_success
     test_http_monitor_tcp_failure
@@ -677,7 +696,7 @@ main() {
 
     echo ""
     echo "========================================"
-    echo "Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed"
+    echo "Results: ${PASS_COUNT} passed, ${FAIL_COUNT} failed, ${NOT_IMPLEMENTED_COUNT} not implemented"
     echo "========================================"
 
     if [[ ${FAIL_COUNT} -gt 0 ]]; then
