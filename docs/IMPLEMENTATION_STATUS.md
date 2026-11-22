@@ -433,8 +433,8 @@ This document provides a verifiable, code-referenced status for each of the 16 s
 | **Anomaly Detection** | **Implemented** | `AnomalyDetector` with spike/drift/pattern break detection; baselines from observations; EventBus integration; scheduler job; incident correlation; dedup cache |
 | **Capacity Planning** | **Implemented** | `CapacityPlanner` with linear regression; time-to-saturation; markdown/JSON reports; scheduler job; **CLI/API exposed** |
 | **Incident Engine** | **Implemented** | `IncidentEngine` consumes EventBus events; manages incident lifecycle with cooldown/dedup; auto-resolve; root cause hypothesis tracking |
-| **Tests (Unit/Integration)** | ✅ 155 passing | **Re-verified 2026-11-17**; all unit/integration tests pass |
-| **E2E Smoke Test** | ✅ 40/40 passing | **Re-verified 2026-11-17**; `scripts/e2e_smoke.sh` all PASS |
+| **Tests (Unit/Integration)** | ✅ 158 passing | **Re-verified 2026-11-22**; all unit/integration tests pass (153 original + 5 persistence) |
+| **E2E Smoke Test** | ✅ 40/40 passing | **Re-verified 2026-11-22**; `scripts/e2e_smoke.sh` all PASS |
 
 ---
 
@@ -487,7 +487,9 @@ cargo build --release
 ./scripts/e2e_smoke.sh
 ```
 
-**Last Verified:** 2026-11-17; `cargo fmt --check`, `cargo clippy`, `cargo test` (143 tests), `cargo build --release`, `./scripts/e2e_smoke.sh` (40/40) all PASS.
+**Last Verified:** 2026-11-22; `cargo fmt --check`, `cargo clippy`, `cargo test` (158 tests), `cargo build --release`, `./scripts/e2e_smoke.sh` (40/40) all PASS.
+
+**1C-1 Verified:** 5 persistence tests added (check_results/events_v2 survive restart, migrations on empty/existing DB, load_last_state after restart, pruning preserves recent data).
 
 ---
 

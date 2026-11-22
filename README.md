@@ -72,8 +72,8 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 | Capacity API | ✅ Implemented | `/api/v1/capacity/report` endpoint (CLI + API); markdown/JSON reports |
 | Synthetic check per-phase metrics | ✅ Implemented | `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` histograms with `target` label |
 | Scheduler metrics | ✅ Implemented | `netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total` exposed via Prometheus |
-| Test suite | ✅ 143 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause, default config — **re-verified 2026-11-17** |
-| E2E smoke test | ✅ 40/40 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-11-17** |
+| Test suite | ✅ 158 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause, default config, **persistence** — **re-verified 2026-11-22** |
+| E2E smoke test | ✅ 40/40 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-11-22** |
 
 **Key limitations:** TLS NOT implemented (server refuses to start if TLS configured — fail-closed), no authentication on API (binds 0.0.0.0:8080 by default — risk for Phase 2), Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, scheduler/event persistence not fully wired to REST, no detector registry, no false positive tracking, no confidence intervals for capacity projections. **Docker/Compose stack validation pending — Docker not available in CI environment.**
 

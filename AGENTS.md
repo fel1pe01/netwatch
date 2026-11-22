@@ -193,15 +193,15 @@ Key sections:
 
 ---
 
-## ⚠️ Estado actual (2026-11-17)
+## ⚠️ Estado actual (2026-11-22)
 
-**BUILD VERIFICADO** — 155 tests pass, 40/40 E2E checks pass, build clean.
+**BUILD VERIFICADO** — 158 tests pass, 40/40 E2E checks pass, build clean.
 
 | Component | Status |
 |-----------|--------|
 | TLS on API | ❌ **NOT implemented** — server refuses to start if TLS configured (fail-closed) |
 | SNMP collector | ⚠️ **Placeholder** — tables exist, no polling code |
-| Scheduler → checks → SQLite → events | ✅ **Complete** — jobs run with hysteresis (down after N failures, up after M successes from confirmed down); persist to check_results/events_v2 via CheckResultWriter actor; load last state from DB on startup; REST endpoints /api/v1/checks, /api/v1/events with pagination and filters; retention pruning job |
+| Scheduler → checks → SQLite → events | ✅ **Complete** — jobs run with hysteresis (down after N failures, up after M successes from confirmed down); persist to check_results/events_v2 via CheckResultWriter actor; load last state from DB on startup; REST endpoints /api/v1/checks, /api/v1/events with pagination and filters; retention pruning job; **persistence verified: 5 tests confirm check_results/events_v2 survive restart, migrations on empty/existing DB, load_last_state after restart, pruning preserves recent data** |
 | Auth on API | ✅ Token-based (Bearer), roles, public paths `/health`, `/metrics` |
 | Default bind | `127.0.0.1:8080` — secure by default |
 | /health, /metrics | Public (no auth required) — by design |

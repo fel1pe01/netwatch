@@ -757,3 +757,35 @@ docs/
 ---
 
 *This completes 1B-2. All quality gates pass. Ready for 1B-3.*
+
+---
+
+### 1C-1: Persistence Verification Tests (2026-11-22)
+
+**Status:** Verified Complete
+**Category:** Testing / Persistence
+
+**Changes:**
+
+1. **tests/persistence_tests.rs** (new file, 5 tests)
+   - `test_check_results_and_events_survive_restart` — writes check_results and events_v2, shuts down CheckResultWriter actor, reconnects to same DB, verifies all 10 check results and 5 events survive with correct data
+   - `test_migrations_on_empty_database` — connects to non-existent DB file, verifies all 10 core tables created (devices, interfaces, observations, check_results, events_v2, incidents, topology_nodes, topology_edges, topology_snapshots, services, vlans, networks, sites, events), verifies local device auto-created
+   - `test_migrations_on_existing_database` — populates DB with data, simulates process restart/upgrade by reconnecting, verifies old data persists and new writes work correctly
+   - `test_load_last_state_after_restart` — writes 3 failures + 1 success, restarts, verifies load_last_check_state() returns correct state (success=true, failures=0, successes=1), verifies StateTracker resumes correctly and emits down event on 3rd subsequent failure
+   - `test_pruning_preserves_recent_data` — inserts 5 old + 3 recent check_results and 4 old + 2 recent events, runs prune with 1-day retention, verifies 5 old check_results + 4 old events deleted, 3 recent check_results + 2 recent events preserved
+
+**Verification:**
+- `cargo fmt --check` ✅
+- `cargo clippy --all-targets --all-features -- -D warnings` ✅
+- `cargo test --locked --all-targets --all-features --no-fail-fast`: **158 tests pass** (47 lib + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause + **5 persistence**)
+- `cargo build --locked --release` ✅
+- `./scripts/e2e_smoke.sh`: **40/40 checks pass**
+
+**Files Added:**
+- tests/persistence_tests.rs (582 lines, 5 tests)
+
+**Files Modified:** None
+
+---
+
+*This completes 1C-1. All quality gates pass. Ready for 1C-2.*
