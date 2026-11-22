@@ -60,6 +60,8 @@ x509-parser = "0.15"
 assert_cmd = "2.2.2"
 futures = "0.3"
 predicates = "3.1.4"
+# reqwest with query feature for tests using RequestBuilder::query()
+reqwest = { version = "0.13", features = ["json", "rustls", "gzip", "query"] }
 
 [profile.dev]
 debug = "line-tables-only"
