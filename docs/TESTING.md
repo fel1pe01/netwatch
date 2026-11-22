@@ -8,11 +8,11 @@ Netwatch uses a multi-layered testing approach:
 
 | Layer | Location | Count | Purpose |
 |-------|----------|-------|---------|
-| Unit tests | `src/*_test.rs`, inline `#[cfg(test)]` | ~20 | Module-level logic |
-| Integration tests | `tests/*.rs` | ~70 | API, database, workflows |
-| E2E smoke tests | `scripts/e2e_smoke.sh` | 40 checks | Full system validation |
+| Unit tests | `src/*_test.rs`, inline `#[cfg(test)]` | ~50 | Module-level logic |
+| Integration tests | `tests/*.rs` | ~146 | API, database, workflows |
+| E2E smoke tests | `scripts/e2e_smoke.sh` | 52 checks | Full system validation |
 
-**Total: ~90 automated tests + 40 E2E checks**
+**Total: 196 automated tests + 48 E2E checks (44 PASS, 4 NOT IMPLEMENTED)** (measured 2026-11-22)
 
 ## Running Tests
 
@@ -65,6 +65,17 @@ E2E_KEEP_LOGS=1 ./scripts/e2e_smoke.sh
 NETWATCH_BIN=/path/to/netwatch ./scripts/e2e_smoke.sh
 ```
 
+**E2E Results Interpretation:**
+- **PASS** — Check passed (HTTP 200, correct JSON, expected metric present, etc.)
+- **FAIL** — Check failed (wrong status code, missing field, metric not found, etc.)
+- **NOT IMPLEMENTED** — Placeholder endpoint (returns empty array); counted separately, does not affect PASS/FAIL
+
+The script exits with:
+- Exit code 0: All checks PASS
+- Exit code 1: One or more checks FAIL
+- Exit code 130: Interrupted (INT)
+- Exit code 143: Terminated (TERM)
+
 ### Pre-push Validation
 
 ```bash
@@ -106,18 +117,23 @@ Each file is a separate crate:
 
 ```
 tests/
-├── integration_test.rs       # Core workflow tests
-├── cli_tests.rs              # CLI command tests
-├── discovery_tests.rs        # Network discovery
-├── monitoring_tests.rs       # Health checks
-├── http_integration_tests.rs # HTTP API tests
-├── metrics_cardinality_test.rs # Metric label validation
-├── config_file_test.rs       # Config parsing
-├── drift_tests.rs            # Drift detection
-├── anomaly_tests.rs          # Anomaly detection
-├── capacity_tests.rs         # Capacity planning
-├── incident_tests.rs         # Incident management
-└── root_cause_tests.rs       # Root cause analysis
+├── anomaly_tests.rs              # Anomaly detection
+├── capacity_tests.rs             # Capacity planning
+├── cli_tests.rs                  # CLI command tests
+├── config_file_test.rs           # Config parsing
+├── core_wiring_tests.rs          # Core wiring (scheduler, writer, retention)
+├── default_config_tests.rs       # Default config values
+├── discovery_persist_tests.rs    # Discovery persistence (writer actor, absence, pruning)
+├── discovery_tests.rs            # Network discovery
+├── drift_tests.rs                # Drift detection
+├── http_integration_tests.rs     # HTTP API tests
+├── incident_tests.rs             # Incident management
+├── integration_test.rs           # Core workflow tests
+├── inventory_endpoints_tests.rs  # Inventory endpoints (auth, pagination, filters, MAC visibility)
+├── metrics_cardinality_test.rs   # Metric label validation
+├── monitoring_tests.rs           # Health checks
+├── persistence_tests.rs          # Persistence (migrations, restart survival, pruning)
+└── root_cause_tests.rs           # Root cause analysis
 ```
 
 Run: `cargo test --tests`
@@ -126,14 +142,20 @@ Run: `cargo test --tests`
 
 Bash script that:
 1. Starts netwatch server on random port
-2. Runs 40 checks against live server
+2. Runs 48 checks against live server
 3. Verifies CLI, HTTP API, and metrics
 4. Cleans up on exit
 
-**Checks:**
-- CLI: version, help, ping, tcp, discover
-- HTTP: health, interfaces, routes, monitor/ping, monitor/tcp, placeholders, devices
-- Metrics: before/after checks, cardinality, labels
+**Checks (48 total = 44 PASS + 4 NOT IMPLEMENTED):**
+- CLI: version, help, ping, tcp, discover (5)
+- HTTP: health, interfaces, routes, hosts, monitor/ping, monitor/tcp (success/failure), placeholders (vlans, subnets, gateways, topology - 4 NOT IMPLEMENTED), events, devices, invalid Content-Type (13 total = 9 PASS + 4 NOT IMPLEMENTED)
+- Metrics: before/after checks, cardinality, labels (10)
+- Metrics: ICMP/TCP counters and histograms (10)
+- Metrics: AppMetrics (2)
+- Metrics: Scheduler metrics (2)
+- Metrics: Synthetic check metrics (11)
+
+---
 
 ## Writing Tests
 
@@ -212,10 +234,13 @@ Common helpers in `tests/http_integration_tests.rs`:
 
 ```rust
 // Spawn isolated test server
-async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) { ... }
+async fn spawn_test_server(auth_enabled: bool) -> (String, tokio::task::JoinHandle<()>, String) { ... }
 
-// HTTP POST helper
-fn http_post(url: &str, payload: &str) -> (String, String) { ... }
+// Spawn test server with roles for MAC visibility testing
+async fn spawn_test_server_with_roles() -> (String, tokio::task::JoinHandle<()>) { ... }
+
+// HTTP auth headers
+fn make_auth_headers(token: &str) -> reqwest::header::HeaderMap { ... }
 
 // Assertions
 fn assert_status(url: &str, expected: &str, desc: &str) { ... }
@@ -344,6 +369,8 @@ The project uses GitHub Actions (`.github/workflows/ci.yml`):
 ./scripts/check.sh --skip-e2e        # Skip e2e smoke test
 ./scripts/check.sh --fail-fast       # Stop on first failure
 ```
+
+See `./scripts/check.sh --help` for all options.
 
 ## Test Data Management
 

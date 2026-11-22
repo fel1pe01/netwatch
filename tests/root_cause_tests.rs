@@ -6,6 +6,7 @@ use netwatch::topology::{
     NodeState, Provenance, TopologyEdge, TopologyEdgeType, TopologyNode, TopologyNodeType,
 };
 use netwatch::topology_store::TopologyStore;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -24,13 +25,19 @@ async fn ensure_device_exists(storage: &Storage, device_id: &str) {
         .unwrap();
 
     if row.is_none() {
+        // Use a unique IP per device to avoid UNIQUE constraint violation on devices.ip
+        // Generate a unique IP based on a hash of the device_id
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        device_id.hash(&mut hasher);
+        let unique_suffix = (hasher.finish() as u32) % 254 + 1;
+        let unique_ip = format!("127.0.0.{}", unique_suffix);
         sqlx::query(
             r#"INSERT INTO devices (id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#
         )
         .bind(device_id)
         .bind(device_id)
-        .bind("127.0.0.1")
+        .bind(&unique_ip)
         .bind("00:00:00:00:00:00")
         .bind("test")
         .bind("test")

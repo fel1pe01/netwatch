@@ -90,8 +90,9 @@ Dockerfile             # Multi-stage, non-root, healthcheck
 3. **Small, verifiable changes** — one logical topic per commit.
 4. **Add/update tests** with every behavioral change.
 5. **Update docs** (`docs/*.md`, `README.md`, `AUDIT_FINAL_REPORT.md`) if real state changes.
-6. **Never mark "done"** in docs unless connected, tested, and verified.
-7. **Pre-push**: run `./scripts/check.sh` (or `--skip-docker` on WSL without Docker Desktop).
+6. Informe de cierre: debe construirse pegando la salida LITERAL de `git show --stat HEAD`, `ls tests/` y el total de tests medido. Prohibido mencionar archivos, tests o cifras que no aparezcan en esa salida. Si un archivo o endpoint no existe, se dice que no existe.
+7. **Never mark "done"** in docs unless connected, tested, and verified.
+8. **Pre-push**: run `./scripts/check.sh` (or `--skip-docker` on WSL without Docker Desktop).
 
 ---
 
@@ -123,8 +124,8 @@ Key sections:
 
 ## Testing
 
-- **Unit/integration**: `cargo test` — 143 tests (config, storage, scheduler, discovery, monitoring, HTTP, metrics cardinality, drift, anomaly, capacity, incidents, root cause, notifications, CLI, default config)
-- **E2E smoke**: `./scripts/e2e_smoke.sh` — 40 checks against release binary (5 CLI, 12 HTTP, 10 metrics, 6 placeholder endpoints, 1 invalid content-type, 6 metrics)
+- **Unit/integration**: `cargo test` — 196 tests (config, storage, scheduler, discovery, monitoring, HTTP, metrics cardinality, drift, anomaly, capacity, incidents, root cause, notifications, CLI, default config, persistence, inventory endpoints, discovery persist)
+- **E2E smoke**: `./scripts/e2e_smoke.sh` — 48 checks against release binary (5 CLI, 13 HTTP, 10 metrics, 4 placeholder endpoints, 1 invalid content-type, 15 metrics); 44 PASS, 0 FAIL, 4 NOT IMPLEMENTED
 - **Known failures**: listed in `scripts/known-failures.txt` (basename only, one per line, `#` comments)
 - **CI parity**: `scripts/check.sh` mirrors `.github/workflows/ci.yml` (if present); keep in sync
 - **Test DB isolation**: each test uses `tempfile::tempdir()` for SQLite
@@ -195,7 +196,7 @@ Key sections:
 
 ## ⚠️ Estado actual (2026-11-22)
 
-**BUILD VERIFICADO** — 158 tests pass, 40/40 E2E checks pass, build clean.
+**BUILD VERIFICADO** — 196 tests pass, 44/48 E2E checks pass (4 NOT IMPLEMENTED), build clean.
 
 | Component | Status |
 |-----------|--------|

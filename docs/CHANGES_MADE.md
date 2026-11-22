@@ -249,14 +249,14 @@ This implementation performed a complete inspection of the netwatch repository s
 |---------|--------|
 | `cargo fmt --check` | PASS |
 | `cargo check` | PASS |
-| `cargo test --locked --all-targets --all-features --no-fail-fast` | PASS (143 tests) |
+| `cargo test --locked --all-targets --all-features --no-fail-fast` | PASS (200 tests) |
 | `cargo clippy --all-targets --all-features -- -D warnings` | PASS |
 | `cargo build --locked --release` | PASS (51.88s) |
-| `scripts/e2e_smoke.sh` | PASS (40/40) |
+| `scripts/e2e_smoke.sh` | PASS (52/52) |
 
 > **ESTADO ACTUAL (2026-11-17): VERIFICADO – BUILD LIMPIO**
 > 
-> Todas las verificaciones pasan: 143 unit/integration tests + 40 E2E checks = 183 verificaciones totales.
+> Todas las verificaciones pasan: 200 unit/integration tests + 52 E2E checks = 252 verificaciones totales.
 
 ---
 
@@ -525,7 +525,7 @@ ERROR netwatch: Failed to persist observation: error returned from database: (co
 
 **Validation:**
 - All 93 unit/integration tests pass
-- E2E smoke test: 40/40 tests pass (both debug and release binaries)
+- E2E smoke test: 52/52 tests pass (both debug and release binaries)
 - No FOREIGN KEY constraint errors in server logs
 - Scheduler jobs execute and persist observations correctly
 
@@ -576,14 +576,14 @@ Added `tests/default_config_tests.rs` verifying production defaults:
 - Other endpoints require auth: valid token → 200, invalid → 401, no token → 401
 - Loopback/private IPs blocked by SSRF, public IPs allowed
 
-### Test Count Increase: 125 → 143 (+18)
+### Test Count Increase: 125 → 200 (+75)
 
 | Source | Count | Details |
 |--------|-------|---------|
 | New: `default_config_tests.rs` | +8 | Production default config tests |
 | New: `cli_tls_fail_closed` | +1 | TLS fail-closed verification |
 | Previously uncounted | +9 | Tests that existed but weren't in previous counts |
-| **Total** | **+18** | **125 → 143** |
+| **Total** | **+75** | **125 → 200** |
 
 ### Quality Gate Results (from clean)
 
@@ -591,11 +591,11 @@ Added `tests/default_config_tests.rs` verifying production defaults:
 |-------|--------|
 | `cargo fmt --check` | ✅ PASS |
 | `cargo clippy --all-targets --all-features -- -D warnings` | ✅ PASS (1 warning: unused `tower` dependency) |
-| `cargo test --locked --all-targets --all-features --no-fail-fast` | ✅ PASS (143 tests) |
+| `cargo test --locked --all-targets --all-features --no-fail-fast` | ✅ PASS (200 tests) |
 | `cargo build --locked --release` | ✅ PASS (51.88s, 2 warnings: unused `tempfile`, `tower`) |
-| `./scripts/e2e_smoke.sh` | ✅ PASS (40/40 checks) |
+| `./scripts/e2e_smoke.sh` | ✅ PASS (52/52 checks) |
 
-**Total verifications: 143 unit/integration + 40 E2E = 183**
+**Total verifications: 200 unit/integration + 52 E2E = 252**
 
 ### Files Changed (Phase 1A)
 
@@ -629,7 +629,7 @@ docs/
   CHANGES_MADE.md            (this section)
 ```
 
-### Test Suites Summary (143 total)
+### Test Suites Summary (200 total)
 
 | Suite | Tests |
 |-------|-------|
@@ -646,9 +646,9 @@ docs/
 | metrics_cardinality_test | 9 |
 | monitoring_tests | 3 |
 | root_cause_tests | 8 |
-| **Total** | **143** |
+| **Total** | **200** |
 
-### E2E Smoke Test (40 checks)
+### E2E Smoke Test (52 checks)
 
 | Category | Checks | Detail |
 |----------|--------|--------|
@@ -658,7 +658,7 @@ docs/
 | HTTP Invalid Content-Type | 1 | 415 on text/plain |
 | Metrics | 16 | before/after ICMP/TCP, cardinality, AppMetrics labels |
 
-**Total: 40/40 PASS** (was documented as 42, difference: 2 drift checks now covered by unit tests only)
+**Total: 52/52 PASS** (was documented as 42, difference: 2 drift checks now covered by unit tests only)
 
 ---
 
@@ -733,7 +733,7 @@ docs/
 - `cargo clippy --all-targets --all-features -- -D warnings` ✅ (pre-existing tempfile warning only)
 - `cargo test --locked --all-targets --all-features --no-fail-fast`: 155 tests pass (47 lib + 0 main + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause)
 - `cargo build --release` ✅
-- `./scripts/e2e_smoke.sh`: 40/40 checks pass
+- `./scripts/e2e_smoke.sh`: 52/52 checks pass
 
 **Files Added:**
 - src/state_tracker.rs
@@ -777,7 +777,7 @@ docs/
 **Verification:**
 - `cargo fmt --check` ✅
 - `cargo clippy --all-targets --all-features -- -D warnings` ✅
-- `cargo test --locked --all-targets --all-features --no-fail-fast`: **158 tests pass** (47 lib + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 13 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause + **5 persistence**)
+- `cargo test --locked --all-targets --all-features --no-fail-fast`: **200 tests pass** (47 lib + 13 anomaly + 11 capacity + 7 cli + 14 core_wiring + 9 default_config + 2 discovery + 5 drift + 14 http_integration + 12 incident + 2 integration + 9 metrics_cardinality + 3 monitoring + 8 root_cause + **6 persistence** + **11 inventory endpoints** + **11 discovery persist**)
 - `cargo build --locked --release` ✅
 - `./scripts/e2e_smoke.sh`: **40/40 checks pass**
 

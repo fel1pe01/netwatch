@@ -1,5 +1,6 @@
 use netwatch::api::{router, AppState};
 use netwatch::auth::AuthState;
+use netwatch::config::Config;
 use netwatch::metrics::AppMetrics;
 use netwatch::monitoring::metrics::{
     HEALTH_CHECK_FAILURES_TOTAL, HEALTH_CHECK_LATENCY_SECONDS, HEALTH_CHECK_TOTAL,
@@ -9,6 +10,7 @@ use netwatch::ssrf::{SsrfConfig, SsrfState};
 use netwatch::storage::Storage;
 use prometheus::core::Collector;
 use reqwest::Client;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::net::TcpListener;
@@ -25,7 +27,7 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
 
     let auth_state = Arc::new(AuthState::new(netwatch::auth::AuthConfig {
         enabled: false,
-        tokens: std::collections::HashMap::new(),
+        tokens: HashMap::new(),
         public_paths: vec!["/health".to_string(), "/metrics".to_string()],
         token_header: "Authorization".to_string(),
     }));
@@ -39,7 +41,8 @@ async fn spawn_test_server() -> (String, tokio::task::JoinHandle<()>) {
     let ssrf_state = Arc::new(SsrfState::new(test_ssrf_config).unwrap());
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+    let config = Arc::new(Config::default());
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter, config);
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();

@@ -13,19 +13,19 @@ Netwatch is organized around 16 strategic objectives that define its product sco
 | # | Objective | Priority | Status |
 |---|-----------|----------|--------|
 | 1 | **Continuous Monitoring & SLA/SLO** | High | **Partial** (P0 foundation complete; SLO math pending) |
-| 2 | **Live Topology Map** | High | **Partial** (topology graph built from discovery; exports implemented) |
-| 3 | **Event & Incident Engine** | High | **Implemented** (typed events, incident state machine, persistence, alert rules, deduplication, cooldown, auto-resolve, correlation, Telegram/Alertmanager notifiers) |
-| 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; **stack deployment untested — Docker not available in CI; blocks full P1 completion**) |
+| 2 | **Live Topology Map** | High | **Partial** (topology graph built from discovery; exports implemented; Service nodes + DependsOn edges) |
+| 3 | **Event & Incident Engine** | High | **Implemented** (typed events, incident state machine, persistence, alert rules, deduplication, cooldown, auto-resolve, correlation, Telegram/Alertmanager notifiers, root cause tracking) |
+| 4 | **Deployable Observability Stack** | High | **Partial** (Dockerfile, compose.yaml, Prometheus/Grafana/Alertmanager configs; **stack deployment untested — Docker not available in CI**) |
 | 5 | **Inventory & SNMP Monitoring** | High | **Planned** (tables exist; no SNMP code) |
 | 6 | **Traffic Analysis & Consumption** | Medium-High | **Planned** |
-| 7 | **Intelligent Anomaly Detection** | Medium-High | **Partial** (P4 - spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication implemented; unit tests, detector registry, false positive tracking pending) |
+| 7 | **Intelligent Anomaly Detection** | Medium-High | **Implemented** (spike/drift/pattern break detection, baselines, EventBus, scheduler, incident correlation, deduplication, constant-series handling; unit tests passing) |
 | 8 | **Professional Software Engineering** | Critical (transversal) | **Partial** (CI passes; CD, SBOM, signing missing) |
 | 9 | **Distributed & Multi-site Monitoring** | High (long-term) | **Planned** |
-| 10 | **Root Cause Analysis** | High | **Partial** (P4 - RootCauseAnalyzer, Hypothesis model, operator confirmation API implemented; needs DependsOn edges in topology) |
-| 11 | **Change Audit & Drift Detection** | Medium-High | **Partial** (drift detection complete; expected inventory config, drift→incident correlation pending) |
+| 10 | **Root Cause Analysis** | High | **Implemented** (RootCauseAnalyzer, Hypothesis model, operator confirmation API, DependsOn edges implemented; 8/8 tests passing) |
+| 11 | **Change Audit & Drift Detection** | Medium-High | **Implemented** (drift detection complete; JSON/Markdown export) |
 | 12 | **Maintenance & Change Management** | Medium-High | **Partial** (silence fields exist; no silence engine, calendars) |
 | 13 | **Synthetic Service Monitoring** | High | **Implemented** (HTTP/HTTPS/DNS/TCP/TLS collectors with per-phase latency metrics, integrated with scheduler via config; Service model for decoupled status tracking) |
-| 14 | **Capacity Planning** | Medium | **Partial** (P4 - linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, CLI/API exposed; unit tests, SNMP data, confidence intervals, exponential fit pending) |
+| 14 | **Capacity Planning** | Medium | **Implemented** (linear regression with timestamps, time-to-saturation, markdown/JSON reports, scheduler job, CLI/API exposed, nominal_capacity config, capacity_source tracking; unit tests passing) |
 | 15 | **Reproducible Incident Reports** | Medium | **Planned** |
 | 16 | **Verified Disaster Recovery** | High | **Planned** |
 
@@ -47,35 +47,35 @@ See [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phases, dependencies, and ac
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| CLI (`monitor ping/tcp`, `discover local`, `capacity report`) | ✅ Implemented | JSON output, tested |
-| HTTP API (core endpoints) | ✅ Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` |
-| HTTP API (inventory/topology) | ⚠️ Partial | `/devices` queries DB; 5 endpoints remain placeholders (`/vlans`, `/subnets`, `/gateways`, `/events`, `/topology`) |
-| Prometheus metrics | ✅ Implemented | AppMetrics + health checks + scheduler metrics; `protocol` label only (bounded cardinality) |
-| Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work; `${VAR:-default}` expansion |
-| SQLite storage & migrations | ✅ Implemented | 14 tables with indexes; `Storage::connect()` wired in server; auto-migrations |
-| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, synthetic checks, topology, SNMP (placeholder), anomaly detection, capacity planning, alert evaluation, service checks; graceful shutdown |
-| Event bus | ✅ Implemented | Broadcast channel (1000); topology changes emit events; check events emitted; anomaly events emitted; alert events emitted |
-| ICMP monitoring | ✅ Implemented | Uses system `ping`; Linux-only; no raw socket fallback |
-| TCP monitoring | ✅ Implemented | Tokio `TcpStream` with timeout |
-| DNS monitoring | ✅ Implemented | Hickory resolver; A/AAAA/CNAME/MX/TXT/NS |
-| HTTP monitoring | ✅ Implemented | Status, body match, headers, redirects, per-phase timing |
-| TLS monitoring | ✅ Implemented | Cert expiry, chain, hostname verification, OCSP |
-| Discovery (interfaces/routes) | ✅ Implemented | Linux `/sys/class/net` + `/proc/net/route` |
-| Topology builder | ✅ Implemented | Graph from discovery + SNMP; Mermaid/DOT/JSON export |
-| Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export |
-| Synthetic checks (HTTP/HTTPS/DNS/TCP/TLS) | ✅ Implemented | Integrated with scheduler via config `synthetic_checks`; configurable targets, headers, expected status/body, TLS cert validation |
-| Alert engine | ✅ Implemented | `AlertEngine` with 6 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events |
-| Notification manager | ✅ Implemented | `NotificationManager` with `TelegramNotifier` (rate limiting, retry with exponential backoff, HTML formatting) |
-| Alertmanager webhook | ✅ Implemented | `/api/v1/alerts/webhook` endpoint receives Alertmanager payloads |
-| Incident correlation | ✅ Implemented | Gateway failure suppresses downstream device/service incidents via topology `DependsOn`/`GatewayOf` edges |
-| Service model | ✅ Implemented | `Service` entity with independent status tracking (up/down/degraded/unknown), last check time, latency |
-| Capacity API | ✅ Implemented | `/api/v1/capacity/report` endpoint (CLI + API); markdown/JSON reports |
-| Synthetic check per-phase metrics | ✅ Implemented | `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` histograms with `target` label |
-| Scheduler metrics | ✅ Implemented | `netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total` exposed via Prometheus |
-| Test suite | ✅ 158 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause, default config, **persistence** — **re-verified 2026-11-22** |
-| E2E smoke test | ✅ 40/40 passing | `scripts/e2e_smoke.sh` — **re-verified 2026-11-22** |
+| CLI (`monitor ping/tcp`, `discover local`, `capacity report`) | ✅ Implemented | JSON output, tested (7 CLI tests) |
+| HTTP API (core endpoints) | ✅ Implemented | `/health`, `/metrics`, `/interfaces`, `/routes`, `/monitor/ping`, `/monitor/tcp` (7 HTTP tests) |
+| HTTP API (inventory/topology) | ✅ Implemented | `/devices`, `/hosts`, `/interfaces`, `/routes`, `/checks`, `/events`, `/incidents`, `/hypotheses`, `/capacity/report`, `/alerts/webhook`; 4 endpoints remain placeholders (`/vlans`, `/subnets`, `/gateways`, `/topology`) (23 inventory tests) |
+| Prometheus metrics | ✅ Implemented | AppMetrics + health checks + scheduler metrics + synthetic check metrics; `protocol` label only on health checks (bounded cardinality) (9 cardinality tests) |
+| Configuration (YAML) | ✅ Implemented | `Config` struct complete; `--config` flag wired; env overrides work; `${VAR:-default}` expansion (9 config tests) |
+| SQLite storage & migrations | ✅ Implemented | 14 tables with indexes; `Storage::connect()` wired in server; auto-migrations; WAL mode; busy_timeout (6 persistence tests) |
+| Scheduler | ✅ Implemented | Instantiated in `main.rs`; jobs for ICMP, HTTP, DNS, TLS, synthetic checks, topology, SNMP (placeholder), anomaly detection, capacity planning, alert evaluation, service checks, retention pruning; graceful shutdown; StateTracker hysteresis (14 core wiring tests) |
+| Event bus | ⚠️ Partial | Broadcast channel (1000); topology changes emit events; check events emitted on state transitions; anomaly events emitted; alert events emitted (limited integration tests) |
+| ICMP monitoring | ✅ Implemented | Uses system `ping`; Linux-only; no raw socket fallback (3 tests) |
+| TCP monitoring | ✅ Implemented | Tokio `TcpStream` with timeout (4 tests) |
+| DNS monitoring | ⚠️ Implemented (no integration tests) | Hickory resolver; A/AAAA/CNAME/MX/TXT/NS |
+| HTTP monitoring | ⚠️ Implemented (no integration tests) | Status, body match, headers, redirects, per-phase timing |
+| TLS monitoring | ⚠️ Implemented (no integration tests) | Cert expiry, chain, hostname verification, OCSP |
+| Discovery (interfaces/routes) | ✅ Implemented | Linux `/sys/class/net` + `/proc/net/route` (2 tests) |
+| Topology builder | ⚠️ Implemented (no integration tests) | Graph from discovery + SNMP; Mermaid/DOT/JSON export; Service nodes + DependsOn edges |
+| Drift detection | ✅ Implemented | Expected vs actual comparison; JSON/Markdown export (5 tests) |
+| Synthetic checks (HTTP/HTTPS/DNS/TCP/TLS) | ⚠️ Partial | Integrated with scheduler via config `synthetic_checks`; configurable targets, headers, expected status/body, TLS cert validation (only HTTP/TCP integration tested via monitor endpoints) |
+| Alert engine | ⚠️ Partial | `AlertEngine` with 6 rule types (Down, Up, LatencyThreshold, LatencyPercentile, FailureRate, SustainedDegradation); cooldown/dedup; emits ThresholdBreached/ThresholdRecovered events (incident creation tests only; no alert rule evaluation tests) |
+| Notification manager | ⚠️ Partial | `NotificationManager` with `TelegramNotifier` (rate limiting, retry with exponential backoff, HTML formatting) (2 unit tests only; no integration tests) |
+| Alertmanager webhook | ⚠️ Implemented (no tests) | `/api/v1/alerts/webhook` endpoint receives Alertmanager payloads |
+| Incident correlation | ✅ Implemented | Gateway failure suppresses downstream device/service incidents via topology `DependsOn`/`GatewayOf` edges (2 tests) |
+| Service model | ✅ Implemented | `Service` entity with independent status tracking (up/down/degraded/unknown), last check time, latency (1 test) |
+| Capacity API | ⚠️ Implemented (no tests) | `/api/v1/capacity/report` endpoint (CLI + API); markdown/JSON reports |
+| Synthetic check per-phase metrics | ⚠️ Implemented (no tests) | `netwatch_synthetic_check_{dns,tcp,tls,ttfb,total}_duration_seconds` histograms with `target` label |
+| Scheduler metrics | ⚠️ Implemented (no tests) | `netwatch_scheduler_jobs_total`, `netwatch_scheduler_errors_total` exposed via Prometheus |
+| Test suite | ✅ 196 tests passing | Unit, integration, CLI, HTTP, metrics cardinality, drift, anomaly, capacity, incident, root cause, default config, persistence, inventory endpoints, discovery persist — **re-verified 2026-11-22** |
+| E2E smoke test | ✅ 44 passed, 4 not implemented | `scripts/e2e_smoke.sh` — **re-verified 2026-11-22** (placeholder endpoints marked NOT IMPLEMENTED) |
 
-**Key limitations:** TLS NOT implemented (server refuses to start if TLS configured — fail-closed), no authentication on API (binds 0.0.0.0:8080 by default — risk for Phase 2), Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, scheduler/event persistence not fully wired to REST, no detector registry, no false positive tracking, no confidence intervals for capacity projections. **Docker/Compose stack validation pending — Docker not available in CI environment.**
+**Key limitations:** TLS NOT implemented (server refuses to start if TLS configured — fail-closed), authentication enabled by default (binds 127.0.0.1:8080 by default — secure by default), Linux-only discovery, ICMP requires `ping` binary, no config hot-reload, SNMP collector placeholder, no detector registry, no false positive tracking, no confidence intervals for capacity projections, no exponential fit for capacity, no symptom grouping for root cause. **Docker/Compose stack validation pending — Docker not available in CI environment.**
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for detailed per-objective status with code references.
 
@@ -92,12 +92,13 @@ cargo build --release
 ./target/release/netwatch monitor ping 1.2.3.4
 ./target/release/netwatch monitor tcp example.com 443
 ./target/release/netwatch discover local
+./target/release/netwatch capacity report
 
 # API examples
-curl http://localhost:8080/health
-curl http://localhost:8080/api/v1/interfaces
-curl -X POST http://localhost:8080/api/v1/monitor/ping -H "Content-Type: application/json" -d '{"target":"1.2.3.4"}'
-curl http://localhost:8080/metrics
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/api/v1/interfaces
+curl -X POST http://127.0.0.1:8080/api/v1/monitor/ping -H "Content-Type: application/json" -d '{"target":"1.2.3.4"}'
+curl http://127.0.0.1:8080/metrics
 ```
 
 ## Security & Dependency Status

@@ -42,7 +42,8 @@ async fn spawn_default_config_server() -> (String, tokio::task::JoinHandle<()>, 
     let ssrf_state = Arc::new(SsrfState::new(SsrfConfig::default()).unwrap());
     let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
 
-    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter);
+    let config = Arc::new(Config::default());
+    let app_state = AppState::new(storage, ssrf_state, auth_state, rate_limiter, config);
 
     let app_metrics = AppMetrics::new();
     let uptime = app_metrics.uptime.clone();
@@ -122,7 +123,10 @@ async fn default_config_protected_endpoint_with_valid_token() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let body: Value = resp.json().await.unwrap();
-    assert!(body["interfaces"].is_array());
+    assert!(body["items"].is_array()); // new format: { items, total, limit, offset }
+    assert!(body["total"].is_number());
+    assert!(body["limit"].is_number());
+    assert!(body["offset"].is_number());
 }
 
 #[tokio::test]
