@@ -49,6 +49,14 @@ pub struct LoggingConfig {
 pub struct DiscoveryConfig {
     pub enabled: bool,
     pub interval: u64,
+    /// Absence detection threshold multiplier (default: 3)
+    /// An element is considered absent if last_seen > interval * multiplier
+    #[serde(default = "default_absence_multiplier")]
+    pub absence_multiplier: u64,
+}
+
+fn default_absence_multiplier() -> u64 {
+    3
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -140,6 +148,8 @@ pub struct SchedulerConfig {
     pub check_results_retention_days: Option<u32>,
     /// Retention period for events in days (default: 90)
     pub events_retention_days: Option<u32>,
+    /// Retention period for absent inventory (interfaces/routes) in days (default: 30)
+    pub inventory_retention_days: Option<u32>,
     /// Interval for retention pruning job in seconds (default: 3600)
     pub retention_prune_interval: Option<u64>,
 }
@@ -152,6 +162,7 @@ impl Default for SchedulerConfig {
             consecutive_successes_threshold: Some(1),
             check_results_retention_days: Some(30),
             events_retention_days: Some(90),
+            inventory_retention_days: Some(30),
             retention_prune_interval: Some(3600),
         }
     }
@@ -299,6 +310,7 @@ impl Default for Config {
             discovery: DiscoveryConfig {
                 enabled: true,
                 interval: 300,
+                absence_multiplier: 3,
             },
             health: HealthConfig { interval: 15 },
             snmp: SnmpConfig {

@@ -1,0 +1,46 @@
+agent:
+  listen: "127.0.0.1:18080"
+
+storage:
+  path: "/tmp/netwatch_test_inventory.sqlite"
+
+discovery:
+  enabled: false
+
+health:
+  interval: 60
+
+scheduler:
+  concurrency: 1
+
+synthetic_checks: []
+
+anomaly: {}
+
+alert: {}
+
+capacity: {}
+
+ssrf:
+  allow_loopback: true
+  allow_private_ips: true
+
+rate_limit:
+  enabled: true
+  requests_per_minute: 1000
+  excluded_paths:
+    - "/health"
+    - "/metrics"
+
+auth:
+  enabled: true
+  tokens:
+    - token: "test-token-12345"
+      roles: ["Admin"]
+    - token: "test-token-operator"
+      roles: ["Operator"]
+    - token: "test-token-viewer"
+      roles: ["Viewer"]
+  public_paths:
+    - "/health"
+    - "/metrics"
