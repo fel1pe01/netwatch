@@ -394,11 +394,45 @@ pub struct EventV2 {
     pub created_at: DateTime<Utc>,
 }
 
-/// Message for the check result writer actor
+/// Upsert interface message for writer actor
+#[derive(Debug, Clone)]
+pub struct UpsertInterfaceMessage {
+    pub id: String,
+    pub device_id: String,
+    pub name: String,
+    pub mac: Option<String>,
+    pub mtu: Option<i64>,
+    pub state: Option<String>,
+    pub source: String,
+    pub confidence: String,
+    pub observed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_seen: String,
+}
+
+/// Upsert route message for writer actor
+#[derive(Debug, Clone)]
+pub struct UpsertRouteMessage {
+    pub id: String,
+    pub destination: String,
+    pub gateway: Option<String>,
+    pub interface: String,
+    pub metric: Option<i64>,
+    pub mask: Option<String>,
+    pub family: String,
+    pub last_seen: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Message for the check result writer actor (extended for inventory)
 #[derive(Debug)]
 pub enum CheckResultMessage {
     WriteCheckResult(CheckResult),
     WriteEvent(EventV2),
+    UpsertInterface(UpsertInterfaceMessage),
+    UpsertRoute(UpsertRouteMessage),
     Shutdown,
 }
 
@@ -426,6 +460,16 @@ impl CheckResultWriter {
                 CheckResultMessage::WriteEvent(ev) => {
                     if let Err(e) = self.write_event(&ev).await {
                         tracing::error!("Failed to write event: {}", e);
+                    }
+                }
+                CheckResultMessage::UpsertInterface(msg) => {
+                    if let Err(e) = self.upsert_interface(&msg).await {
+                        tracing::error!("Failed to upsert interface: {}", e);
+                    }
+                }
+                CheckResultMessage::UpsertRoute(msg) => {
+                    if let Err(e) = self.upsert_route(&msg).await {
+                        tracing::error!("Failed to upsert route: {}", e);
                     }
                 }
                 CheckResultMessage::Shutdown => {
@@ -495,6 +539,74 @@ impl CheckResultWriter {
         .await?;
         Ok(())
     }
+
+    async fn upsert_interface(&self, msg: &UpsertInterfaceMessage) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO interfaces (
+                id, device_id, name, mac, mtu, state, source, confidence, observed_at, created_at, updated_at, last_seen
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                device_id = excluded.device_id,
+                name = excluded.name,
+                mac = excluded.mac,
+                mtu = excluded.mtu,
+                state = excluded.state,
+                source = excluded.source,
+                confidence = excluded.confidence,
+                observed_at = excluded.observed_at,
+                updated_at = excluded.updated_at,
+                last_seen = excluded.last_seen
+            "#,
+        )
+        .bind(&msg.id)
+        .bind(&msg.device_id)
+        .bind(&msg.name)
+        .bind(&msg.mac)
+        .bind(msg.mtu)
+        .bind(&msg.state)
+        .bind(&msg.source)
+        .bind(&msg.confidence)
+        .bind(&msg.observed_at)
+        .bind(&msg.created_at)
+        .bind(&msg.updated_at)
+        .bind(&msg.last_seen)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn upsert_route(&self, msg: &UpsertRouteMessage) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO routes (
+                id, destination, gateway, interface, metric, mask, family, last_seen, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                destination = excluded.destination,
+                gateway = excluded.gateway,
+                interface = excluded.interface,
+                metric = excluded.metric,
+                mask = excluded.mask,
+                family = excluded.family,
+                last_seen = excluded.last_seen,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&msg.id)
+        .bind(&msg.destination)
+        .bind(&msg.gateway)
+        .bind(&msg.interface)
+        .bind(msg.metric)
+        .bind(&msg.mask)
+        .bind(&msg.family)
+        .bind(&msg.last_seen)
+        .bind(&msg.created_at)
+        .bind(&msg.updated_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 /// Load last known state for an entity from check_results
@@ -556,6 +668,29 @@ pub async fn prune_old_data(
     Ok((check_deleted, events_deleted))
 }
 
+/// Prune absent interfaces and routes based on retention config
+/// Deletes interfaces and routes where last_seen is older than retention_days
+pub async fn prune_absent_inventory(pool: &SqlitePool, retention_days: u32) -> Result<(u64, u64)> {
+    let cutoff = Utc::now() - chrono::Duration::days(retention_days as i64);
+    let cutoff_str = cutoff.to_rfc3339();
+
+    let interfaces_deleted =
+        sqlx::query("DELETE FROM interfaces WHERE last_seen IS NOT NULL AND last_seen < ?")
+            .bind(&cutoff_str)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+    let routes_deleted =
+        sqlx::query("DELETE FROM routes WHERE last_seen IS NOT NULL AND last_seen < ?")
+            .bind(&cutoff_str)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+    Ok((interfaces_deleted, routes_deleted))
+}
+
 /// Filter parameters for check results query
 #[derive(Default)]
 pub struct CheckResultsFilter {
@@ -573,45 +708,74 @@ pub struct CheckResultsFilter {
 pub async fn get_check_results(
     pool: &SqlitePool,
     filter: CheckResultsFilter,
-) -> Result<Vec<CheckResult>> {
-    let mut query = String::from("SELECT * FROM check_results WHERE 1=1");
+) -> Result<PaginatedResponse<CheckResult>> {
+    let mut where_clauses = Vec::new();
     let mut args: Vec<String> = vec![];
 
     if let Some(eid) = filter.entity_id {
-        query.push_str(" AND entity_id = ?");
+        where_clauses.push("entity_id = ?".to_string());
         args.push(eid);
     }
     if let Some(etype) = filter.entity_type {
-        query.push_str(" AND entity_type = ?");
+        where_clauses.push("entity_type = ?".to_string());
         args.push(etype);
     }
     if let Some(proto) = filter.protocol {
-        query.push_str(" AND protocol = ?");
+        where_clauses.push("protocol = ?".to_string());
         args.push(proto);
     }
     if let Some(s) = filter.success {
-        query.push_str(" AND success = ?");
+        where_clauses.push("success = ?".to_string());
         args.push(s.to_string());
     }
     if let Some(s) = filter.since {
-        query.push_str(" AND observed_at >= ?");
+        where_clauses.push("observed_at >= ?".to_string());
         args.push(s.to_rfc3339());
     }
     if let Some(u) = filter.until {
-        query.push_str(" AND observed_at <= ?");
+        where_clauses.push("observed_at <= ?".to_string());
         args.push(u.to_rfc3339());
     }
 
-    query.push_str(" ORDER BY observed_at DESC LIMIT ? OFFSET ?");
-    args.push(filter.limit.to_string());
-    args.push(filter.offset.to_string());
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
 
-    let mut q = sqlx::query_as::<_, CheckResultRow>(&query);
-    for arg in args {
-        q = q.bind(arg);
+    // Count total
+    let count_query = format!("SELECT COUNT(*) FROM check_results {}", where_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+    for arg in &args {
+        count_q = count_q.bind(arg);
     }
-    let rows = q.fetch_all(pool).await?;
-    rows.into_iter().map(|r| r.into_check_result()).collect()
+    let total: i64 = count_q.fetch_one(pool).await.unwrap_or(0);
+
+    // Get paginated results
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+
+    let items_query = format!(
+        "SELECT * FROM check_results {} ORDER BY observed_at DESC LIMIT ? OFFSET ?",
+        where_sql
+    );
+    let mut items_q = sqlx::query_as::<_, CheckResultRow>(&items_query);
+    for arg in &args {
+        items_q = items_q.bind(arg);
+    }
+    items_q = items_q.bind(limit).bind(offset);
+    let rows = items_q.fetch_all(pool).await?;
+    let items = rows
+        .into_iter()
+        .map(|r| r.into_check_result())
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(PaginatedResponse {
+        items,
+        total,
+        limit,
+        offset,
+    })
 }
 
 /// Filter parameters for events query
@@ -627,41 +791,479 @@ pub struct EventsFilter {
 }
 
 /// Get events with pagination
-pub async fn get_events(pool: &SqlitePool, filter: EventsFilter) -> Result<Vec<EventV2>> {
-    let mut query = String::from("SELECT * FROM events_v2 WHERE 1=1");
+pub async fn get_events(
+    pool: &SqlitePool,
+    filter: EventsFilter,
+) -> Result<PaginatedResponse<EventV2>> {
+    let mut where_clauses = Vec::new();
     let mut args: Vec<String> = vec![];
 
     if let Some(eid) = filter.entity_id {
-        query.push_str(" AND entity_id = ?");
+        where_clauses.push("entity_id = ?".to_string());
         args.push(eid);
     }
     if let Some(etype) = filter.entity_type {
-        query.push_str(" AND entity_type = ?");
+        where_clauses.push("entity_type = ?".to_string());
         args.push(etype);
     }
     if let Some(etype) = filter.event_type {
-        query.push_str(" AND event_type = ?");
+        where_clauses.push("event_type = ?".to_string());
         args.push(etype);
     }
     if let Some(s) = filter.since {
-        query.push_str(" AND event_ts >= ?");
+        where_clauses.push("event_ts >= ?".to_string());
         args.push(s.to_rfc3339());
     }
     if let Some(u) = filter.until {
-        query.push_str(" AND event_ts <= ?");
+        where_clauses.push("event_ts <= ?".to_string());
         args.push(u.to_rfc3339());
     }
 
-    query.push_str(" ORDER BY event_ts DESC LIMIT ? OFFSET ?");
-    args.push(filter.limit.to_string());
-    args.push(filter.offset.to_string());
+    let where_sql = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
 
-    let mut q = sqlx::query_as::<_, EventV2Row>(&query);
-    for arg in args {
-        q = q.bind(arg);
+    // Count total
+    let count_query = format!("SELECT COUNT(*) FROM events_v2 {}", where_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+    for arg in &args {
+        count_q = count_q.bind(arg);
     }
-    let rows = q.fetch_all(pool).await?;
-    rows.into_iter().map(|r| r.into_event()).collect()
+    let total: i64 = count_q.fetch_one(pool).await.unwrap_or(0);
+
+    // Get paginated results
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+
+    let items_query = format!(
+        "SELECT * FROM events_v2 {} ORDER BY event_ts DESC LIMIT ? OFFSET ?",
+        where_sql
+    );
+    let mut items_q = sqlx::query_as::<_, EventV2Row>(&items_query);
+    for arg in &args {
+        items_q = items_q.bind(arg);
+    }
+    items_q = items_q.bind(limit).bind(offset);
+    let rows = items_q.fetch_all(pool).await?;
+    let items = rows
+        .into_iter()
+        .map(|r| r.into_event())
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(PaginatedResponse {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Pagination response wrapper
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: i64,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// Filter parameters for devices query
+#[derive(Default)]
+pub struct DevicesFilter {
+    pub id: Option<String>,
+    pub ip: Option<String>,
+    pub hostname: Option<String>,
+    pub device_type: Option<String>,
+    pub limit: i64,
+    pub offset: i64,
+    pub order_by: Option<String>,
+    pub order_dir: Option<String>,
+}
+
+/// Get devices with pagination from DB
+pub async fn get_devices(
+    pool: &SqlitePool,
+    filter: DevicesFilter,
+) -> Result<PaginatedResponse<DeviceRow>> {
+    // Whitelist allowed ORDER BY columns
+    let allowed_order_by = [
+        "id",
+        "hostname",
+        "ip",
+        "device_type",
+        "created_at",
+        "updated_at",
+    ];
+    let order_by = filter
+        .order_by
+        .as_deref()
+        .filter(|c| allowed_order_by.contains(c))
+        .unwrap_or("created_at");
+    let order_dir = filter
+        .order_dir
+        .as_deref()
+        .filter(|d| d.eq_ignore_ascii_case("asc") || d.eq_ignore_ascii_case("desc"))
+        .unwrap_or("DESC");
+
+    // Build WHERE clause for exact-match filters only
+    let mut where_clauses: Vec<String> = vec![];
+    let mut args: Vec<String> = vec![];
+
+    if let Some(id) = filter.id {
+        where_clauses.push("id = ?".to_string());
+        args.push(id);
+    }
+    if let Some(ip) = filter.ip {
+        where_clauses.push("ip = ?".to_string());
+        args.push(ip);
+    }
+    if let Some(hostname) = filter.hostname {
+        where_clauses.push("hostname = ?".to_string());
+        args.push(hostname);
+    }
+    if let Some(device_type) = filter.device_type {
+        where_clauses.push("device_type = ?".to_string());
+        args.push(device_type);
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    // Count total
+    let count_query = format!("SELECT COUNT(*) FROM devices {}", where_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+    for arg in &args {
+        count_q = count_q.bind(arg);
+    }
+    let total: i64 = count_q.fetch_one(pool).await.unwrap_or(0);
+
+    // Validate and clamp limit/offset
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+
+    // Fetch items with explicit columns (no SELECT *)
+    let items_query = format!(
+        "SELECT id, hostname, ip, mac, device_type, source, confidence, observed_at, created_at, updated_at \
+         FROM devices {} ORDER BY {} {} LIMIT ? OFFSET ?",
+        where_sql, order_by, order_dir
+    );
+    let mut items_q = sqlx::query_as::<_, DeviceRow>(&items_query);
+    for arg in &args {
+        items_q = items_q.bind(arg);
+    }
+    items_q = items_q.bind(limit).bind(offset);
+    let items = items_q.fetch_all(pool).await?;
+
+    // Devices don't have last_seen, so they are always present
+    let items = items
+        .into_iter()
+        .map(|mut r| {
+            r.present = true;
+            r
+        })
+        .collect();
+
+    Ok(PaginatedResponse {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Device row from DB
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct DeviceRow {
+    pub id: String,
+    pub hostname: Option<String>,
+    pub ip: Option<String>,
+    pub mac: Option<String>,
+    pub device_type: Option<String>,
+    pub source: Option<String>,
+    pub confidence: Option<String>,
+    pub observed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Whether the device is considered present (not absent)
+    #[sqlx(default)]
+    pub present: bool,
+}
+
+/// Filter parameters for interfaces query
+#[derive(Default)]
+pub struct InterfacesFilter {
+    pub device_id: Option<String>,
+    pub name: Option<String>,
+    pub present: Option<bool>,
+    pub limit: i64,
+    pub offset: i64,
+    pub order_by: Option<String>,
+    pub order_dir: Option<String>,
+}
+
+/// Get interfaces with pagination from DB
+pub async fn get_interfaces(
+    pool: &SqlitePool,
+    filter: InterfacesFilter,
+    absence_threshold_seconds: i64,
+) -> Result<PaginatedResponse<InterfaceRow>> {
+    let allowed_order_by = [
+        "id",
+        "device_id",
+        "name",
+        "mac",
+        "mtu",
+        "state",
+        "created_at",
+        "updated_at",
+    ];
+    let order_by = filter
+        .order_by
+        .as_deref()
+        .filter(|c| allowed_order_by.contains(c))
+        .unwrap_or("created_at");
+    let order_dir = filter
+        .order_dir
+        .as_deref()
+        .filter(|d| d.eq_ignore_ascii_case("asc") || d.eq_ignore_ascii_case("desc"))
+        .unwrap_or("DESC");
+
+    let mut where_clauses: Vec<String> = vec![];
+    let mut args: Vec<String> = vec![];
+
+    if let Some(device_id) = filter.device_id {
+        where_clauses.push("device_id = ?".to_string());
+        args.push(device_id);
+    }
+    if let Some(name) = filter.name {
+        where_clauses.push("name = ?".to_string());
+        args.push(name);
+    }
+    // Add present filter
+    if let Some(present) = filter.present {
+        let threshold = Utc::now() - chrono::Duration::seconds(absence_threshold_seconds);
+        let threshold_str = threshold.to_rfc3339();
+        if present {
+            // present = true: last_seen > (now - threshold)
+            where_clauses.push("(last_seen IS NOT NULL AND last_seen > ?)".to_string());
+            args.push(threshold_str);
+        } else {
+            // present = false: last_seen IS NULL OR last_seen <= (now - threshold)
+            where_clauses.push("(last_seen IS NULL OR last_seen <= ?)".to_string());
+            args.push(threshold_str);
+        }
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    let count_query = format!("SELECT COUNT(*) FROM interfaces {}", where_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+    for arg in &args {
+        count_q = count_q.bind(arg);
+    }
+    let total: i64 = count_q.fetch_one(pool).await.unwrap_or(0);
+
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+
+    let items_query = format!(
+        "SELECT id, device_id, name, mac, mtu, state, source, confidence, observed_at, created_at, updated_at, last_seen \
+         FROM interfaces {} ORDER BY {} {} LIMIT ? OFFSET ?",
+        where_sql, order_by, order_dir
+    );
+    let mut items_q = sqlx::query_as::<_, InterfaceRow>(&items_query);
+    for arg in &args {
+        items_q = items_q.bind(arg);
+    }
+    items_q = items_q.bind(limit).bind(offset);
+    let items = items_q.fetch_all(pool).await?;
+
+    // Compute present field based on last_seen and absence threshold
+    let threshold = Utc::now() - chrono::Duration::seconds(absence_threshold_seconds);
+    let items = items
+        .into_iter()
+        .map(|mut r| {
+            r.present = r
+                .last_seen
+                .as_ref()
+                .and_then(|ls| ls.parse::<DateTime<Utc>>().ok())
+                .map(|last_seen| last_seen > threshold)
+                .unwrap_or(false);
+            r
+        })
+        .collect();
+
+    Ok(PaginatedResponse {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Interface row from DB
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct InterfaceRow {
+    pub id: String,
+    pub device_id: String,
+    pub name: Option<String>,
+    pub mac: Option<String>,
+    pub mtu: Option<i64>,
+    pub state: Option<String>,
+    pub source: Option<String>,
+    pub confidence: Option<String>,
+    pub observed_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_seen: Option<String>,
+    /// Whether the interface is considered present (not absent)
+    #[sqlx(default)]
+    pub present: bool,
+}
+
+/// Filter parameters for routes query
+#[derive(Default)]
+pub struct RoutesFilter {
+    pub destination: Option<String>,
+    pub interface: Option<String>,
+    pub gateway: Option<String>,
+    pub present: Option<bool>,
+    pub limit: i64,
+    pub offset: i64,
+    pub order_by: Option<String>,
+    pub order_dir: Option<String>,
+}
+
+/// Get routes with pagination from DB
+pub async fn get_routes(
+    pool: &SqlitePool,
+    filter: RoutesFilter,
+    absence_threshold_seconds: i64,
+) -> Result<PaginatedResponse<RouteRow>> {
+    let allowed_order_by = [
+        "id",
+        "destination",
+        "gateway",
+        "interface",
+        "metric",
+        "family",
+        "created_at",
+        "updated_at",
+    ];
+    let order_by = filter
+        .order_by
+        .as_deref()
+        .filter(|c| allowed_order_by.contains(c))
+        .unwrap_or("created_at");
+    let order_dir = filter
+        .order_dir
+        .as_deref()
+        .filter(|d| d.eq_ignore_ascii_case("asc") || d.eq_ignore_ascii_case("desc"))
+        .unwrap_or("DESC");
+
+    let mut where_clauses: Vec<String> = vec![];
+    let mut args: Vec<String> = vec![];
+
+    if let Some(destination) = filter.destination {
+        where_clauses.push("destination = ?".to_string());
+        args.push(destination);
+    }
+    if let Some(interface) = filter.interface {
+        where_clauses.push("interface = ?".to_string());
+        args.push(interface);
+    }
+    if let Some(gateway) = filter.gateway {
+        where_clauses.push("gateway = ?".to_string());
+        args.push(gateway);
+    }
+    // Add present filter
+    if let Some(present) = filter.present {
+        let threshold = Utc::now() - chrono::Duration::seconds(absence_threshold_seconds);
+        let threshold_str = threshold.to_rfc3339();
+        if present {
+            where_clauses.push("(last_seen IS NOT NULL AND last_seen > ?)".to_string());
+            args.push(threshold_str);
+        } else {
+            where_clauses.push("(last_seen IS NULL OR last_seen <= ?)".to_string());
+            args.push(threshold_str);
+        }
+    }
+
+    let where_sql = if where_clauses.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    let count_query = format!("SELECT COUNT(*) FROM routes {}", where_sql);
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_query);
+    for arg in &args {
+        count_q = count_q.bind(arg);
+    }
+    let total: i64 = count_q.fetch_one(pool).await.unwrap_or(0);
+
+    let limit = filter.limit.clamp(1, 500);
+    let offset = filter.offset.max(0);
+
+    let items_query = format!(
+        "SELECT id, destination, gateway, interface, metric, mask, family, last_seen, created_at, updated_at \
+         FROM routes {} ORDER BY {} {} LIMIT ? OFFSET ?",
+        where_sql, order_by, order_dir
+    );
+    let mut items_q = sqlx::query_as::<_, RouteRow>(&items_query);
+    for arg in &args {
+        items_q = items_q.bind(arg);
+    }
+    items_q = items_q.bind(limit).bind(offset);
+    let items = items_q.fetch_all(pool).await?;
+
+    // Compute present field based on last_seen and absence threshold
+    let threshold = Utc::now() - chrono::Duration::seconds(absence_threshold_seconds);
+    let items = items
+        .into_iter()
+        .map(|mut r| {
+            r.present = r
+                .last_seen
+                .parse::<DateTime<Utc>>()
+                .map(|last_seen| last_seen > threshold)
+                .unwrap_or(false);
+            r
+        })
+        .collect();
+
+    Ok(PaginatedResponse {
+        items,
+        total,
+        limit,
+        offset,
+    })
+}
+
+/// Route row from DB
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct RouteRow {
+    pub id: String,
+    pub destination: String,
+    pub gateway: Option<String>,
+    pub interface: String,
+    pub metric: Option<i64>,
+    pub mask: Option<String>,
+    pub family: String,
+    pub last_seen: String,
+    pub created_at: String,
+    pub updated_at: String,
+    /// Whether the route is considered present (not absent)
+    #[sqlx(default)]
+    pub present: bool,
 }
 
 #[derive(FromRow)]

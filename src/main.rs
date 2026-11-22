@@ -25,7 +25,9 @@ use netwatch::scheduler::Scheduler;
 use netwatch::service::ServiceStore;
 use netwatch::snmp::SnmpCollector;
 use netwatch::ssrf::SsrfState;
-use netwatch::storage::{prune_old_data, CheckResultMessage, CheckResultWriter, Storage};
+use netwatch::storage::{
+    prune_absent_inventory, prune_old_data, CheckResultMessage, CheckResultWriter, Storage,
+};
 use netwatch::topology_builder::TopologyBuilder;
 use netwatch::topology_store::TopologyStore;
 use serde_json::to_string;
@@ -417,6 +419,7 @@ async fn main() -> Result<()> {
             let storage = prune_storage.clone();
             let check_results_retention_days = check_results_retention_days;
             let events_retention_days = events_retention_days;
+            let inventory_retention_days = config.scheduler.inventory_retention_days.unwrap_or(30);
             Box::pin(async move {
                 tracing::info!("Running retention pruning...");
                 if let Err(e) = prune_old_data(
@@ -427,6 +430,12 @@ async fn main() -> Result<()> {
                 .await
                 {
                     tracing::error!("Retention pruning failed: {}", e);
+                }
+                // Prune absent inventory
+                if let Err(e) =
+                    prune_absent_inventory(&storage.pool, inventory_retention_days).await
+                {
+                    tracing::error!("Absent inventory pruning failed: {}", e);
                 }
                 Ok(())
             })
@@ -620,6 +629,7 @@ async fn main() -> Result<()> {
         ssrf_state.clone(),
         auth_state.clone(),
         rate_limiter.clone(),
+        config.clone().into(),
     );
 
     let app = api_router(app_state).merge(Router::new().route(
